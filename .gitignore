@@ -1,0 +1,14 @@
+node_modules/
+.playwright-mcp/
+.next/
+.vercel/
+.env*
+!.env.example
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+.DS_Store
+.workflow-data/
+src/app/.well-known/workflow/
+/.swc

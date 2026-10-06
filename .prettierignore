@@ -1,0 +1,13 @@
+node_modules
+.next
+src/app/.well-known/workflow
+.vercel
+.playwright-mcp
+test-results
+playwright-report
+package-lock.json
+supabase/setup.sql
+modelos-csv
+.env*
+AGENTS.md
+CLAUDE.md
