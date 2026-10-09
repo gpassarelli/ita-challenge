@@ -191,6 +191,8 @@ Para uma execução antiga cujo workflow já terminou, envie `POST /api/agents/r
 
 Os logs `database_operation` e `agent_generation` incluem operação, duração, tentativa, código e identificadores, sem prompts, dados comerciais ou credenciais.
 
+O armazenamento local dos checkpoints fica em `.workflow-data/`, fora de `.next/`, para sobreviver aos builds. Ao atualizar uma instalação antiga, com o servidor parado, copie o conteúdo de `.next/workflow-data/` para `.workflow-data/` antes do primeiro build se esse histórico ainda existir. A hospedagem Vercel continua usando o backend durável da plataforma.
+
 ### Workspace conflict retry storms
 
 Apply `supabase/migrations/202610090002_workspace_conflict.sql` after the sparse-write migration. Business version conflicts now return `PT409` (HTTP 409), rather than `40001`, which PostgREST can retry indefinitely using the same stale version. The application re-reads current data between at most four attempts with backoff/jitter. Progress-only saves skip scoring recalculation when evaluations are current and skip record relationship scans. Permissions, atomic version checks, relationship checks on record writes, and score history remain in effect.
