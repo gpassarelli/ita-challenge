@@ -1,7 +1,9 @@
-import { getWorkflowMetadata } from "workflow";
+import { getWorkflowMetadata, sleep } from "workflow";
 import {
   claimRun,
   isRunActive,
+  executionSettings,
+  generationCooldown,
   prepareCompany,
   beginGeneration,
   generateCompany,
@@ -21,37 +23,67 @@ export async function runAgents(runId: string) {
       getWorkflowMetadata().workflowRunId,
     );
     if (!companyIds) return;
-    for (let i = 0; i < companyIds.length; i += 3) {
-      if (!(await isRunActive(runId))) return;
-      await Promise.all(
-        companyIds.slice(i, i + 3).map(async (companyId) => {
-          try {
-            const prepared = await prepareCompany(runId, companyId);
-            if (!prepared) return;
-            for (let attempt = 1; attempt <= 2; attempt++) {
-              if (!(await beginGeneration(prepared, attempt))) return;
-              const generated = await generateCompany(prepared, attempt);
-              if (generated.cancelled) return;
-              await recordGeneration(prepared, generated, attempt);
-              if (generated.revision) {
-                await saveCompany(prepared, generated.revision);
-                return;
-              }
-              if (!generated.retryable || attempt === 2) {
-                await failCompany(
-                  runId,
-                  companyId,
-                  generated.error ?? undefined,
-                );
-                return;
-              }
+    const settings = await executionSettings(runId);
+    let next = 0;
+    let cancelled = false;
+    await Promise.all(
+      Array.from(
+        { length: Math.min(settings.concurrency, companyIds.length) },
+        async () => {
+          while (next < companyIds.length && !cancelled) {
+            const companyId = companyIds[next++];
+            if (!(await isRunActive(runId))) {
+              cancelled = true;
+              return;
             }
-          } catch (error) {
-            await failCompany(runId, companyId, agentErrorMessage(error));
+            try {
+              const prepared = await prepareCompany(runId, companyId);
+              if (!prepared) continue;
+              let feedback: string | undefined;
+              for (let attempt = 1; attempt <= 2; attempt++) {
+                let cooldown = await generationCooldown(runId);
+                while (cooldown > 0) {
+                  await sleep(cooldown);
+                  if (!(await isRunActive(runId))) {
+                    cancelled = true;
+                    return;
+                  }
+                  cooldown = await generationCooldown(runId);
+                }
+                if (!(await beginGeneration(prepared, attempt))) break;
+                const generated = await generateCompany(
+                  prepared,
+                  attempt,
+                  feedback,
+                );
+                if (generated.cancelled) {
+                  cancelled = true;
+                  return;
+                }
+                await recordGeneration(prepared, generated, attempt);
+                if (generated.revision) {
+                  await saveCompany(prepared, generated.revision);
+                  break;
+                }
+                if (!generated.retryable || attempt === 2) {
+                  await failCompany(
+                    runId,
+                    companyId,
+                    generated.error ?? undefined,
+                  );
+                  break;
+                }
+                feedback = generated.feedback;
+                await sleep(generated.retryDelayMs ?? 1000);
+              }
+            } catch (error) {
+              await failCompany(runId, companyId, agentErrorMessage(error));
+            }
           }
-        }),
-      );
-    }
+        },
+      ),
+    );
+    if (cancelled || !(await isRunActive(runId))) return;
     await finishRun(runId);
   } catch (error) {
     await failRun(runId, agentErrorMessage(error));

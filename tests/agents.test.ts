@@ -28,6 +28,14 @@ vi.mock("../src/lib/server/supabase", () => ({
 }));
 vi.mock("workflow/api", () => ({ start: mocks.start }));
 vi.mock("../src/workflows/agents", () => ({ runAgents: vi.fn() }));
+vi.mock("../src/lib/server/agent-store", () => ({
+  mutateAgentWorkspace: (
+    actor: string,
+    _runId: string,
+    _companyId: string | null,
+    fn: (state: Workspace) => unknown,
+  ) => mocks.mutateWorkspace(actor, fn),
+}));
 import {
   prepareCompany,
   beginGeneration,

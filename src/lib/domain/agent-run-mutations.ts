@@ -3,13 +3,14 @@ import type { agentRequestSchema } from "./commands";
 import { agentContext } from "./agents";
 import { audit } from "./mutations";
 import { agentEligibility, archiveBlockReason } from "./agent-runs";
-import { isoNow, type AgentRun, type Workspace } from "./types";
+import { isoNow, type AgentRun, type Workspace, type AgentExecutionSettings } from "./types";
 
 // Called inside mutateWorkspace so conflicts recompute eligibility from fresh data.
 export function queueAgentRun(
   state: Workspace,
   actor: string,
   input: z.infer<typeof agentRequestSchema>,
+  settings?: AgentExecutionSettings,
 ) {
   const previous = state.runs.find((r) => r.id === input.id);
   if (previous) return previous.status === "queued" && !previous.workflowId;
@@ -33,6 +34,7 @@ export function queueAgentRun(
     );
   const run: AgentRun = {
     ...input,
+    settings,
     companyIds,
     skippedCompanies,
     requestedBy: actor,

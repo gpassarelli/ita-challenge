@@ -201,6 +201,8 @@ export type AgentStep = {
   error?: string;
 };
 export type AgentRun = {
+  settings?: AgentExecutionSettings;
+  rateLimitUntil?: string;
   id: string;
   archivedAt?: string;
   archivedBy?: string;
@@ -229,7 +231,12 @@ export type AgentRun = {
     finishedAt?: string;
     attempts?: number;
     steps?: AgentStep[];
+    usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
   }[];
+};
+export type AgentExecutionSettings = {
+  concurrency: number;
+  timeoutMs: number;
 };
 export type Audit = {
   id: string;

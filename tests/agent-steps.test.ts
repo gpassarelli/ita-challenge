@@ -25,6 +25,14 @@ vi.mock("../src/lib/server/agents", () => ({
     execute: mock.execute,
   }),
 }));
+vi.mock("../src/lib/server/agent-store", () => ({
+  mutateAgentWorkspace: (
+    actor: string,
+    _runId: string,
+    _companyId: string | null,
+    fn: (state: Workspace) => unknown,
+  ) => mock.mutate(actor, fn),
+}));
 import {
   prepareCompany,
   beginGeneration,
@@ -239,4 +247,25 @@ it("não retoma itens nem lotes que já esgotaram as tentativas", async () => {
   expect(await claimRun(id, "late-workflow")).toBeNull();
   expect(state.runs[0].status).toBe("failed");
   expect(mock.execute).not.toHaveBeenCalled();
+});
+
+it("registra tokens de uma resposta inválida uma vez e conserva feedback seguro", async () => {
+  const { c, id } = setup();
+  const prepared = (await prepareCompany(id, c.id))!;
+  await beginGeneration(prepared, 1);
+  mock.execute.mockRejectedValue({
+    name: "AI_NoObjectGeneratedError",
+    text: "secret",
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+  });
+  const generated = await generateCompany(prepared);
+  expect(generated).toMatchObject({
+    retryable: true,
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+  });
+  expect(generated.feedback).not.toContain("secret");
+  await recordGeneration(prepared, generated, 1);
+  await recordGeneration(prepared, generated, 1);
+  expect(state.runs[0].items[0].usage?.totalTokens).toBe(15);
+  expect(state.runs[0].items[0].steps?.at(-1)?.phase).toBe("validating");
 });

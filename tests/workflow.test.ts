@@ -12,12 +12,18 @@ const mock = vi.hoisted(() => ({
   save: vi.fn(),
   record: vi.fn(),
   begin: vi.fn(),
+  settings: vi.fn(),
+  cooldown: vi.fn(),
+  sleep: vi.fn(),
 }));
 vi.mock("workflow", () => ({
   getWorkflowMetadata: () => ({ workflowRunId: "workflow-test" }),
+  sleep: mock.sleep,
 }));
 vi.mock("@/lib/server/agent-steps", () => ({
   claimRun: mock.claim,
+  executionSettings: mock.settings,
+  generationCooldown: mock.cooldown,
   isRunActive: mock.isActive,
   prepareCompany: async (runId: string, companyId: string) => ({
     runId,
@@ -36,6 +42,8 @@ vi.mock("@/lib/server/agent-steps", () => ({
 import { runAgents } from "../src/workflows/agents";
 beforeEach(() => {
   vi.resetAllMocks();
+  mock.settings.mockResolvedValue({ concurrency: 3, timeoutMs: 60000 });
+  mock.cooldown.mockResolvedValue(0);
   mock.active = 0;
   mock.peak = 0;
   mock.done = [];
@@ -83,7 +91,11 @@ it("não executa um lote já assumido por outro workflow", async () => {
 });
 it("não agenda o próximo lote depois do cancelamento", async () => {
   mock.claim.mockResolvedValue(["1", "2", "3", "4", "5"]);
-  mock.isActive.mockResolvedValueOnce(true).mockResolvedValue(false);
+  mock.isActive
+    .mockResolvedValueOnce(true)
+    .mockResolvedValueOnce(true)
+    .mockResolvedValueOnce(true)
+    .mockResolvedValue(false);
   await runAgents("batch-test");
   expect(mock.done).toEqual(["1", "2", "3"]);
   expect(mock.finish).not.toHaveBeenCalled();
@@ -108,4 +120,61 @@ it("não repete erros permanentes e mantém o motivo final", async () => {
   await runAgents("batch-test");
   expect(mock.generate).toHaveBeenCalledOnce();
   expect(mock.failures).toEqual(["4"]);
+});
+
+it("processa 120 empresas com oito vagas e resultados independentes", async () => {
+  mock.settings.mockResolvedValue({ concurrency: 8, timeoutMs: 60000 });
+  mock.claim.mockResolvedValue(
+    Array.from({ length: 120 }, (_, i) => String(i + 1)),
+  );
+  await runAgents("batch-test");
+  expect(mock.peak).toBe(8);
+  expect(mock.done).toHaveLength(119);
+  expect(mock.failures).toEqual(["4"]);
+});
+
+it("reabastece a vaga livre sem esperar a empresa lenta", async () => {
+  mock.settings.mockResolvedValue({ concurrency: 2, timeoutMs: 60000 });
+  mock.claim.mockResolvedValue(["slow", "fast", "next"]);
+  let release!: () => void;
+  const slow = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let nextStarted!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    nextStarted = resolve;
+  });
+  mock.generate.mockImplementation(async ({ companyId }) => {
+    if (companyId === "slow") await slow;
+    if (companyId === "next") nextStarted();
+    return { revision: { id: companyId } };
+  });
+  const work = runAgents("batch-test");
+  await ready;
+  expect(mock.done).not.toContain("slow");
+  release();
+  await work;
+  expect(mock.done).toHaveLength(3);
+});
+
+it("envia feedback na única tentativa corretiva e respeita o cooldown", async () => {
+  mock.claim.mockResolvedValue(["1"]);
+  mock.cooldown.mockResolvedValueOnce(7000).mockResolvedValue(0);
+  mock.generate
+    .mockResolvedValueOnce({
+      error: "AI_OUTPUT",
+      retryable: true,
+      feedback: "Campo growth: use Baixo, Médio, Alto.",
+      retryDelayMs: 1200,
+    })
+    .mockResolvedValueOnce({ revision: { id: "1" } });
+  await runAgents("batch-test");
+  expect(mock.sleep.mock.calls.map(([ms]) => ms)).toEqual([7000, 1200]);
+  expect(mock.generate).toHaveBeenNthCalledWith(
+    2,
+    expect.anything(),
+    2,
+    "Campo growth: use Baixo, Médio, Alto.",
+  );
+  expect(mock.done).toEqual(["1"]);
 });

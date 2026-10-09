@@ -2,7 +2,11 @@ import { generateText, Output } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { messageOutputSchema, validateEvidence } from "@/lib/domain/agents";
 import { composePrompt, type AgentContext, type AgentResult } from "./shared";
-import type { AgentProgress } from "./shared";
+import {
+  usageSummary,
+  type AgentProgress,
+  type AgentExecutionOptions,
+} from "./shared";
 
 export const OUTREACH_PROMPT = `
 Prepare uma mensagem curta e personalizada para o produto selecionado e o canal indicado.
@@ -21,21 +25,28 @@ export async function executeOutreach(
   model: string,
   onProgress?: AgentProgress,
   signal?: AbortSignal,
+  options: AgentExecutionOptions = {},
 ): Promise<AgentResult> {
   if (!context.product) throw new Error("Selecione um produto do portfólio.");
+  const timeoutMs = options.timeoutMs ?? 60000;
   const response = await generateText({
     model: openai(model),
-    system: composePrompt(OUTREACH_PROMPT),
+    system:
+      composePrompt(OUTREACH_PROMPT) +
+      (options.feedback
+        ? ` Correção da tentativa anterior: ${options.feedback}`
+        : ""),
     prompt: JSON.stringify(context.input),
     output: Output.object({ schema: messageOutputSchema }),
     maxOutputTokens: 4000,
     maxRetries: 0,
-    timeout: 60000,
+    timeout: timeoutMs,
     abortSignal: AbortSignal.any([
-      AbortSignal.timeout(60000),
+      AbortSignal.timeout(timeoutMs),
       ...(signal ? [signal] : []),
     ]),
   });
+  options.onUsage?.(usageSummary(response.usage));
   await onProgress?.("validating");
   const result = messageOutputSchema.parse(response.output);
   validateEvidence(result.evidenceIds, context.records);

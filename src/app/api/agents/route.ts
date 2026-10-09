@@ -8,6 +8,7 @@ import { mutateWorkspace } from "@/lib/server/store";
 import { assertSameOrigin, errorResponse } from "@/lib/server/http";
 import { configuredAgent } from "@/lib/server/agents";
 import { runAgents } from "@/workflows/agents";
+import { agentExecutionSettings } from "@/lib/server/agent-config";
 export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
@@ -15,7 +16,7 @@ export async function POST(request: Request) {
     const input = agentRequestSchema.parse(await request.json());
     configuredAgent(input.agent);
     let { state, result } = await mutateWorkspace(user.id, (state) =>
-      queueAgentRun(state, user.id, input),
+      queueAgentRun(state, user.id, input, agentExecutionSettings()),
     );
     if (result) {
       let workflow;

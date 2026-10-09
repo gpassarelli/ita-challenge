@@ -2,7 +2,11 @@ import { generateText, Output } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { signalOutputSchema, validatedChanges } from "@/lib/domain/agents";
 import { composePrompt, type AgentContext, type AgentResult } from "./shared";
-import type { AgentProgress } from "./shared";
+import {
+  usageSummary,
+  type AgentProgress,
+  type AgentExecutionOptions,
+} from "./shared";
 
 export const SIGNALS_PROMPT = `
 Você trabalha com dados fictícios de demonstração, não com dados reais.
@@ -29,23 +33,44 @@ export async function executeSignals(
   model: string,
   onProgress?: AgentProgress,
   signal?: AbortSignal,
+  options: AgentExecutionOptions = {},
 ): Promise<AgentResult> {
+  const timeoutMs = options.timeoutMs ?? 60000;
   const response = await generateText({
     model: openai(model),
-    system: composePrompt(SIGNALS_PROMPT),
+    system:
+      composePrompt(SIGNALS_PROMPT) +
+      (options.feedback
+        ? ` Correção da tentativa anterior: ${options.feedback}`
+        : ""),
     prompt: JSON.stringify(context.input),
-    output: Output.object({ schema: signalOutputSchema, name: "company_signal_review" }),
+    output: Output.object({
+      schema: signalOutputSchema,
+      name: "company_signal_review",
+    }),
     providerOptions: { openai: { strictJsonSchema: true } },
     maxOutputTokens: 4000,
     maxRetries: 0,
-    timeout: 60000,
+    timeout: timeoutMs,
     abortSignal: AbortSignal.any([
-      AbortSignal.timeout(60000),
+      AbortSignal.timeout(timeoutMs),
       ...(signal ? [signal] : []),
     ]),
   });
+  options.onUsage?.(usageSummary(response.usage));
   await onProgress?.("validating");
-  const result = signalOutputSchema.parse(response.output);
+  const parsed = signalOutputSchema.safeParse(response.output);
+  if (!parsed.success) {
+    // Capture only field identifiers for safe corrective feedback.
+    throw Object.assign(parsed.error, {
+      value: {
+        changes: (
+          response.output as { changes?: { field?: unknown }[] }
+        )?.changes?.map((change) => ({ field: change.field })),
+      },
+    });
+  }
+  const result = parsed.data;
   return {
     type: "data",
     changes: validatedChanges(result, context.company, context.records),
