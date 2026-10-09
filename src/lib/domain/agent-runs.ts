@@ -47,3 +47,13 @@ export function assertSignalsEligible(
     throw new PendingDataRevisionError();
   }
 }
+
+export function archiveBlockReason(state: Workspace, run: AgentRun) {
+  const terminal = (status: string) =>
+    status === "completed" || status === "failed";
+  if (!terminal(run.status) || run.items.some((item) => !terminal(item.status)))
+    return "Aguarde a execução terminar para arquivar.";
+  if (state.revisions.some((r) => r.runId === run.id && r.status === "pending"))
+    return "Aprove ou recuse todas as revisões desta execução antes de arquivar.";
+  return null;
+}

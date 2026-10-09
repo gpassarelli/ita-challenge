@@ -1,7 +1,8 @@
 import type { z } from "zod";
 import type { agentRequestSchema } from "./commands";
 import { agentContext } from "./agents";
-import { agentEligibility } from "./agent-runs";
+import { audit } from "./mutations";
+import { agentEligibility, archiveBlockReason } from "./agent-runs";
 import { isoNow, type AgentRun, type Workspace } from "./types";
 
 // Called inside mutateWorkspace so conflicts recompute eligibility from fresh data.
@@ -49,4 +50,18 @@ export function queueAgentRun(
   selection.forEach((id) => agentContext(state, run, id));
   state.runs.push(run);
   return true;
+}
+
+export function archiveRun(state: Workspace, actor: string, id: string) {
+  const run = state.runs.find((r) => r.id === id);
+  if (!run) throw new Error("Execução não encontrada.");
+  if (run.archivedAt) return;
+  const reason = archiveBlockReason(state, run);
+  if (reason) throw new Error(reason);
+  run.archivedAt = isoNow();
+  run.archivedBy = actor;
+  audit(state, actor, "Execução arquivada", id, null, {
+    archivedAt: run.archivedAt,
+    archivedBy: actor,
+  });
 }

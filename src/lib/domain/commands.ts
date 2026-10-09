@@ -71,6 +71,7 @@ const exclusion = z
   })
   .strict();
 export const commandSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("archiveRun"), id }).strict(),
   z
     .object({
       type: z.literal("record"),

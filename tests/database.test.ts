@@ -1,8 +1,11 @@
+import { archiveRun } from "../src/lib/domain/agent-run-mutations";
+import type { Workspace } from "../src/lib/domain/types";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
 import {
   actor,
+  run,
   company,
   emptyWorkspace,
   uid,
@@ -311,4 +314,34 @@ it("preserva histórico anterior e persiste alternativas e versão do novo cálc
     (await db.query<{ n: number }>("select count(*)::int n from score_history"))
       .rows[0].n,
   ).toBe(count);
+});
+
+it("persiste metadados de arquivo e exclusões no JSON existente sem migração", async () => {
+  const state = (
+    await db.query<{ state: Workspace }>("select public.read_workspace() state")
+  ).rows[0].state;
+  const prospect = company(state);
+  const execution = run(prospect, {
+    status: "failed",
+    items: [
+      {
+        companyId: prospect.id,
+        status: "failed",
+        error: "Falha preservada",
+        revisionId: null,
+      },
+    ],
+    skippedCompanies: [{ companyId: uid(), revisionIds: [uid()] }],
+  });
+  state.runs.push(execution);
+  archiveRun(state, actor, execution.id);
+  await db.query("select public.commit_workspace($1,$2,$3::jsonb)", [
+    state.version,
+    actor,
+    JSON.stringify(state),
+  ]);
+  const restored = (
+    await db.query<{ state: Workspace }>("select public.read_workspace() state")
+  ).rows[0].state;
+  expect(restored.runs.find((r) => r.id === execution.id)).toEqual(execution);
 });

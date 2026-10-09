@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { agentEligibility } from "../src/lib/domain/agent-runs";
-import { queueAgentRun } from "../src/lib/domain/agent-run-mutations";
+import {
+  archiveRun,
+  queueAgentRun,
+} from "../src/lib/domain/agent-run-mutations";
+import { executeCommand } from "../src/lib/domain/execute";
 import { decideRevision } from "../src/lib/domain/mutations";
 import { actor, company, emptyWorkspace, revision, run, uid } from "./fixtures";
 
@@ -83,5 +87,61 @@ describe("fila de agentes", () => {
     expect(() => queueAgentRun(s, actor, request([c.id]))).toThrow(
       "Aguarde a execução",
     );
+  });
+});
+
+describe("arquivamento compartilhado", () => {
+  it("exige lote e itens finalizados e todas as revisões resolvidas", () => {
+    const s = emptyWorkspace(),
+      c = company(s);
+    const execution = run(c, {
+      items: [
+        { companyId: c.id, status: "running", error: null, revisionId: null },
+      ],
+    });
+    s.runs.push(execution);
+    expect(() => archiveRun(s, actor, execution.id)).toThrow("Aguarde");
+    execution.status = "completed";
+    expect(() => archiveRun(s, actor, execution.id)).toThrow("Aguarde");
+    execution.items[0].status = "completed";
+    const data = revision(c, { runId: execution.id });
+    const message = revision(c, { runId: execution.id, type: "message" });
+    s.revisions.push(data, message);
+    decideRevision(s, actor, data.id, "approved", "");
+    expect(() => archiveRun(s, actor, execution.id)).toThrow(
+      "todas as revisões",
+    );
+    decideRevision(s, actor, message.id, "rejected", "Rever texto");
+    const before = structuredClone(s.records);
+    const command = { type: "archiveRun" as const, id: execution.id };
+    const requestId = uid();
+    executeCommand(s, actor, command, requestId);
+    const archivedAt = execution.archivedAt;
+    executeCommand(s, actor, command, requestId);
+    executeCommand(s, actor, command, uid());
+    expect(execution.archivedBy).toBe(actor);
+    expect(execution.archivedAt).toBe(archivedAt);
+    expect(archivedAt).toBeTruthy();
+    expect(s.records).toEqual(before);
+    expect(s.revisions).toHaveLength(2);
+    expect(
+      s.audits.filter((a) => a.action === "Execução arquivada"),
+    ).toHaveLength(1);
+  });
+
+  it("permite arquivar falhas sem revisões e registros antigos sem metadados", () => {
+    const s = emptyWorkspace(),
+      c = company(s);
+    const execution = run(c, {
+      status: "failed",
+      items: [
+        { companyId: c.id, status: "failed", error: "Falha", revisionId: null },
+      ],
+    });
+    s.runs.push(execution);
+    archiveRun(s, actor, execution.id);
+    expect(execution.archivedAt).toBeTruthy();
+    expect(execution.items[0].error).toBe("Falha");
+    expect(() => archiveRun(s, actor, uid())).toThrow("não encontrada");
   });
 });
