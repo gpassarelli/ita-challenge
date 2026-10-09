@@ -1,21 +1,30 @@
-import { beforeEach, afterEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { actor, company, emptyWorkspace, revision, uid } from "./fixtures";
 import type { Workspace } from "../src/lib/domain/types";
-const mock = vi.hoisted(() => ({ rpc: vi.fn(), start: vi.fn() }));
+
+const mock = vi.hoisted(() => ({
+  rpc: vi.fn(),
+  start: vi.fn(),
+  cancel: vi.fn(),
+  getRun: vi.fn(),
+}));
 vi.mock("server-only", () => ({}));
-vi.mock("workflow/api", () => ({ start: mock.start }));
+vi.mock("workflow/api", () => ({ start: mock.start, getRun: mock.getRun }));
 vi.mock("../src/workflows/agents", () => ({ runAgents: vi.fn() }));
+vi.mock("../src/lib/server/agents", () => ({ configuredAgent: vi.fn() }));
 vi.mock("../src/lib/server/supabase", () => ({
   requireUser: async () => ({ id: "00000000-0000-4000-8000-000000000001" }),
   adminClient: () => ({ rpc: mock.rpc }),
 }));
 import { POST } from "../src/app/api/agents/route";
+import { POST as cancel } from "../src/app/api/agents/cancel/route";
+
 let state: Workspace;
 let beforeCommit: (() => boolean) | undefined;
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.stubEnv("OPENAI_MODEL", "test");
-  vi.stubEnv("OPENAI_API_KEY", "test");
+  mock.start.mockResolvedValue({ runId: "workflow-test", cancel: vi.fn() });
+  mock.getRun.mockReturnValue({ cancel: mock.cancel });
   state = emptyWorkspace();
   beforeCommit = undefined;
   mock.rpc.mockImplementation((operation, args) => {
@@ -44,7 +53,6 @@ beforeEach(() => {
     return { abortSignal: async () => ({ data: state.version, error: null }) };
   });
 });
-afterEach(() => vi.unstubAllEnvs());
 function post(companyIds: string[], id = uid()) {
   return POST(
     new Request("http://localhost/api/agents", {
@@ -61,10 +69,11 @@ function post(companyIds: string[], id = uid()) {
     }),
   );
 }
+
 it("API exclui pendências e devolve o mesmo lote em replays", async () => {
   const a = company(state),
-    b = company(state),
-    pending = revision(a);
+    b = company(state);
+  const pending = revision(a);
   state.revisions.push(pending);
   const id = uid();
   const response = await post([a.id, b.id, b.id], id);
@@ -74,6 +83,7 @@ it("API exclui pendências e devolve o mesmo lote em replays", async () => {
     skippedCompanies: [{ companyId: a.id, revisionIds: [pending.id] }],
   });
   expect(state.runs[0].companyIds).toEqual([b.id]);
+  expect(mock.start).toHaveBeenCalledOnce();
   state.runs[0].workflowId = "claimed";
   state.revisions[0].status = "rejected";
   const replay = await post([a.id, b.id], id);
@@ -84,6 +94,7 @@ it("API exclui pendências e devolve o mesmo lote em replays", async () => {
   expect(mock.start).toHaveBeenCalledOnce();
   expect(state.runs).toHaveLength(1);
 });
+
 it("API não inicia workflow quando todas as empresas estão bloqueadas", async () => {
   const c = company(state);
   state.revisions.push(revision(c));
@@ -93,6 +104,7 @@ it("API não inicia workflow quando todas as empresas estão bloqueadas", async 
   expect(state.runs).toHaveLength(0);
   expect(mock.start).not.toHaveBeenCalled();
 });
+
 it("recalcula elegibilidade quando a gravação concorre com uma nova revisão", async () => {
   const a = company(state),
     b = company(state);
@@ -107,5 +119,27 @@ it("recalcula elegibilidade quando a gravação concorre com uma nova revisão",
   expect(response.status).toBe(200);
   expect(state.runs[0].companyIds).toEqual([b.id]);
   expect(state.runs[0].requestedBy).toBe(actor);
+  expect(state.runs[0].skippedCompanies?.[0].companyId).toBe(a.id);
   expect(mock.start).toHaveBeenCalledOnce();
+});
+
+it("cancela o workflow e o lote, preserva resultados e permite nova execução", async () => {
+  const c = company(state);
+  const id = uid();
+  await post([c.id], id);
+  const request = () =>
+    new Request("http://localhost/api/agents/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+  expect((await cancel(request())).status).toBe(200);
+  expect(mock.getRun).toHaveBeenCalledWith("workflow-test");
+  expect(mock.cancel).toHaveBeenCalledOnce();
+  expect(state.runs[0].status).toBe("cancelled");
+  expect((await cancel(request())).status).toBe(200);
+  expect(
+    state.audits.filter((a) => a.action === "Execução cancelada"),
+  ).toHaveLength(1);
+  expect((await post([c.id])).status).toBe(200);
 });

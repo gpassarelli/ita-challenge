@@ -50,7 +50,7 @@ export function assertSignalsEligible(
 
 export function archiveBlockReason(state: Workspace, run: AgentRun) {
   const terminal = (status: string) =>
-    status === "completed" || status === "failed";
+    status === "completed" || status === "failed" || status === "cancelled";
   if (!terminal(run.status) || run.items.some((item) => !terminal(item.status)))
     return "Aguarde a execução terminar para arquivar.";
   if (state.revisions.some((r) => r.runId === run.id && r.status === "pending"))

@@ -65,6 +65,7 @@ export function RunList({
                       running: "Em execução",
                       completed: failed ? "Concluída com falhas" : "Concluída",
                       failed: "Falhou",
+                      cancelled: "Cancelada",
                     }[run.status]}
               </Badge>
             </div>
@@ -104,6 +105,7 @@ export function ExecutionPanel({
   onClose,
   onSave,
   onResume,
+  onCancel,
   onReturnCompany,
   triggerRef,
 }: {
@@ -113,6 +115,7 @@ export function ExecutionPanel({
   onClose: () => void;
   onSave: (command: UserCommand) => Promise<void>;
   onResume: (run: AgentRun) => Promise<void>;
+  onCancel: (run: AgentRun) => Promise<void>;
   onReturnCompany: (id: string) => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
 }) {
@@ -273,6 +276,7 @@ export function ExecutionPanel({
                     companyId={target.companyId}
                     onReview={review}
                     onResume={onResume}
+                    onCancel={onCancel}
                   />
                   {!!run.skippedCompanies?.length && (
                     <div className="mb-4 rounded border border-amber-200 p-3 text-xs">

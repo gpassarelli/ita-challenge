@@ -65,3 +65,69 @@ export function archiveRun(state: Workspace, actor: string, id: string) {
     archivedBy: actor,
   });
 }
+
+export function cancelAgentRun(state: Workspace, actor: string, id: string) {
+  const run = state.runs.find((r) => r.id === id);
+  if (!run) throw new Error("Execução não encontrada.");
+  if (run.status === "cancelled") return run.workflowId;
+  if (run.status !== "queued" && run.status !== "running") return null;
+  const at = isoNow();
+  run.status = "cancelled";
+  run.finishedAt = at;
+  for (const item of run.items) {
+    if (item.status !== "queued" && item.status !== "running") continue;
+    item.status = "cancelled";
+    item.finishedAt = at;
+    item.error = null;
+    for (const step of item.steps ?? []) {
+      if (step.status !== "running") continue;
+      step.status = "cancelled";
+      step.finishedAt = at;
+    }
+  }
+  audit(state, actor, "Execução cancelada", id, null, { cancelledAt: at });
+  return run.workflowId;
+}
+
+// Reconcile only workflows whose runtime has already reached a terminal state.
+export function reconcileAgentRun(
+  state: Workspace,
+  actor: string,
+  id: string,
+  workflowStatus: "completed" | "failed" | "cancelled",
+) {
+  const run = state.runs.find((r) => r.id === id);
+  if (!run) throw new Error("Execução não encontrada.");
+  if (run.status !== "queued" && run.status !== "running") return;
+  if (workflowStatus === "cancelled") {
+    cancelAgentRun(state, actor, id);
+    return;
+  }
+  const at = isoNow();
+  const reason =
+    "A execução anterior terminou sem concluir esta empresa. Inicie uma nova execução. Código: WORKFLOW_FINISHED.";
+  for (const item of run.items) {
+    if (item.status !== "queued" && item.status !== "running") continue;
+    item.status = "failed";
+    item.finishedAt = at;
+    item.error ??= reason;
+    for (const step of item.steps ?? []) {
+      if (step.status !== "running") continue;
+      step.status = "failed";
+      step.finishedAt = at;
+      step.error ??= item.error;
+    }
+  }
+  run.status =
+    workflowStatus === "failed" || run.items.every((i) => i.status === "failed")
+      ? "failed"
+      : "completed";
+  run.finishedAt = at;
+  if (run.status === "failed")
+    run.error ??=
+      "As tentativas da execução anterior terminaram. Consulte o erro da empresa e inicie uma nova execução.";
+  audit(state, actor, "Execução reconciliada", id, null, {
+    workflowStatus,
+    status: run.status,
+  });
+}

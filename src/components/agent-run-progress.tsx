@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import type { AgentPhase, AgentRun, Workspace } from "@/lib/domain/types";
 import { dateBR, display } from "@/lib/utils";
-import { Badge } from "./ui/fields";
+import { Badge, ErrorNote } from "./ui/fields";
 import { Button } from "./ui/button";
 
 const phases: Record<AgentPhase, { label: string; detail: string }> = {
@@ -13,7 +13,7 @@ const phases: Record<AgentPhase, { label: string; detail: string }> = {
   generating: {
     label: "Aguardando a IA",
     detail:
-      "Enviando o contexto e aguardando a resposta do modelo. A chamada tem limite de 60 segundos.",
+      "Enviando o contexto e aguardando a resposta do modelo. Cada tentativa tem limite de 60 segundos; falhas temporárias permitem uma única nova tentativa.",
   },
   validating: {
     label: "Validando resposta",
@@ -23,7 +23,7 @@ const phases: Record<AgentPhase, { label: string; detail: string }> = {
   saving: {
     label: "Salvando revisão",
     detail:
-      "Gravando a proposta para revisão humana, sem aplicar alterações ao cadastro.",
+      "A IA já respondeu. Gravando a proposta para revisão humana; se a base falhar, a gravação será repetida sem chamar a IA novamente.",
   },
 };
 const statusLabel = {
@@ -31,6 +31,7 @@ const statusLabel = {
   running: "Em execução",
   completed: "Concluída",
   failed: "Falhou",
+  cancelled: "Cancelada",
 };
 function duration(start: string, end: string | undefined, now: number) {
   const seconds = Math.max(
@@ -45,14 +46,18 @@ function duration(start: string, end: string | undefined, now: number) {
 export function AgentRunProgress({
   state,
   onResume,
+  onCancel,
   onReview,
   companyId,
 }: {
   state: Workspace;
   onResume: (run: AgentRun) => Promise<void>;
+  onCancel: (run: AgentRun) => Promise<void>;
   onReview?: (id: string) => void;
   companyId?: string;
 }) {
+  const [cancelling, setCancelling] = useState<string | null>(null);
+  const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const active = state.runs.some(
     (r) => r.status === "queued" || r.status === "running",
@@ -83,6 +88,9 @@ export function AgentRunProgress({
             (i) => i.status === "completed",
           ).length;
           const failed = run.items.filter((i) => i.status === "failed").length;
+          const cancelled = run.items.filter(
+            (i) => i.status === "cancelled",
+          ).length;
           const finished = completed + failed;
           const percent = run.items.length
             ? Math.round((100 * finished) / run.items.length)
@@ -115,14 +123,36 @@ export function AgentRunProgress({
                     : statusLabel[run.status]}
                 </Badge>
               </div>
+              {(run.status === "queued" || run.status === "running") && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  disabled={cancelling !== null}
+                  onClick={async () => {
+                    setCancelling(run.id);
+                    setError("");
+                    try {
+                      await onCancel(run);
+                    } catch (e) {
+                      setError((e as Error).message);
+                    } finally {
+                      setCancelling(null);
+                    }
+                  }}
+                >
+                  {cancelling === run.id ? "Cancelando…" : "Cancelar execução"}
+                </Button>
+              )}
+              <ErrorNote message={error} />
               <div className="mt-3 flex flex-wrap justify-between gap-2 text-neutral-600">
                 <span>
                   {finished} de {run.items.length} empresas finalizadas ·{" "}
                   {percent}%
                 </span>
                 <span>
-                  {completed} com sucesso · {failed} falhas ·{" "}
-                  {duration(run.requestedAt, run.finishedAt, now)}
+                  {completed} com sucesso · {failed} falhas · {cancelled}{" "}
+                  canceladas · {duration(run.requestedAt, run.finishedAt, now)}
                 </span>
               </div>
               <progress
@@ -195,7 +225,9 @@ export function AgentRunProgress({
                                     ? "Concluída"
                                     : step.status === "failed"
                                       ? "Falhou"
-                                      : "Em andamento"}{" "}
+                                      : step.status === "cancelled"
+                                        ? "Cancelada"
+                                        : "Em andamento"}{" "}
                                   ·{" "}
                                   {duration(
                                     step.startedAt,

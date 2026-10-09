@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { agentEligibility } from "../src/lib/domain/agent-runs";
 import {
   archiveRun,
+  cancelAgentRun,
+  reconcileAgentRun,
   queueAgentRun,
 } from "../src/lib/domain/agent-run-mutations";
 import { executeCommand } from "../src/lib/domain/execute";
@@ -144,4 +146,59 @@ describe("arquivamento compartilhado", () => {
     expect(execution.items[0].error).toBe("Falha");
     expect(() => archiveRun(s, actor, uid())).toThrow("não encontrada");
   });
+});
+
+it("cancelamento preserva resultados concluídos e exige revisar antes de arquivar", () => {
+  const s = emptyWorkspace();
+  const a = company(s),
+    b = company(s);
+  const execution = run(a, {
+    status: "running",
+    companyIds: [a.id, b.id],
+    items: [
+      {
+        companyId: a.id,
+        status: "completed",
+        revisionId: "saved",
+        error: null,
+      },
+      { companyId: b.id, status: "queued", revisionId: null, error: null },
+    ],
+  });
+  s.runs.push(execution);
+  const saved = revision(a, { runId: execution.id });
+  s.revisions.push(saved);
+  const before = structuredClone(execution.items[0]);
+  cancelAgentRun(s, actor, execution.id);
+  expect(execution.items[0]).toEqual(before);
+  expect(s.revisions).toEqual([saved]);
+  expect(() => archiveRun(s, actor, execution.id)).toThrow("todas as revisões");
+  saved.status = "rejected";
+  archiveRun(s, actor, execution.id);
+  expect(execution.archivedAt).toBeTruthy();
+});
+
+it("reconcilia workflow encerrado sem retomar IA e preserva o erro original", () => {
+  const state = emptyWorkspace();
+  const c = company(state);
+  const execution = run(c, {
+    status: "running",
+    items: [
+      {
+        companyId: c.id,
+        status: "running",
+        error: "Código: TIMEOUT.",
+        revisionId: null,
+      },
+    ],
+  });
+  state.runs.push(execution);
+  reconcileAgentRun(state, actor, execution.id, "failed");
+  expect(execution.status).toBe("failed");
+  expect(execution.items[0].error).toBe("Código: TIMEOUT.");
+  expect(execution.items[0].finishedAt).toBeTruthy();
+  reconcileAgentRun(state, actor, execution.id, "failed");
+  expect(
+    state.audits.filter((a) => a.action === "Execução reconciliada"),
+  ).toHaveLength(1);
 });

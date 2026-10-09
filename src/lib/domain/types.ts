@@ -197,7 +197,7 @@ export type AgentStep = {
   attempt: number;
   startedAt: string;
   finishedAt?: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "cancelled";
   error?: string;
 };
 export type AgentRun = {
@@ -216,10 +216,10 @@ export type AgentRun = {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
   items: {
     companyId: string;
-    status: "queued" | "running" | "completed" | "failed";
+    status: "queued" | "running" | "completed" | "failed" | "cancelled";
     error: string | null;
     revisionId: string | null;
     input?: unknown;

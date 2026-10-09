@@ -15,15 +15,18 @@ Abra [localhost:3000](http://localhost:3000). Sem as variáveis de Supabase, a i
 
 Copie `.env.example` para `.env.local` **apenas se ainda não existir configuração local**. Não sobrescreva um `.env` ou `.env.local` já configurado.
 
-| Variável                               | Uso                                                       |
-| -------------------------------------- | --------------------------------------------------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`             | URL do projeto Supabase                                   |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Chave pública do projeto                                  |
-| `SUPABASE_SERVICE_ROLE_KEY`            | Chave administrativa, exclusivamente no servidor          |
-| `OPENAI_API_KEY`                       | Chave da API OpenAI, exclusivamente no servidor           |
-| `OPENAI_MODEL`                         | Identificador de um modelo da conta com saída estruturada |
+| Variável                               | Uso                                                          |
+| -------------------------------------- | ------------------------------------------------------------ |
+| `NEXT_PUBLIC_SUPABASE_URL`             | URL do projeto Supabase                                      |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Chave pública do projeto                                     |
+| `SUPABASE_SERVICE_ROLE_KEY`            | Chave administrativa, exclusivamente no servidor             |
+| `OPENAI_API_KEY`                       | Chave da API OpenAI, exclusivamente no servidor              |
+| `AI_SIGNALS_MODEL`                     | Modelo OpenAI com saída estruturada para analisar sinais     |
+| `AI_OUTREACH_MODEL`                    | Modelo OpenAI com saída estruturada para preparar abordagens |
 
-O modelo é explícito; não existe um modelo padrão silencioso. O login do aplicativo usa Supabase Auth. As chamadas aos agentes usam a API OpenAI via Vercel AI SDK.
+Cada agente exige um modelo explícito; não existe um modelo padrão silencioso. Use identificadores nativos da OpenAI, sem prefixo de gateway (`openai/`). O login do aplicativo usa Supabase Auth. As chamadas aos agentes usam diretamente a API OpenAI via Vercel AI SDK.
+
+Em instalações existentes, substitua `OPENAI_MODEL` por `AI_SIGNALS_MODEL` e `AI_OUTREACH_MODEL` no ambiente local e na hospedagem. Para manter o comportamento anterior, configure ambos com o valor antigo. A variável antiga não é mais lida. A execução valida a chave e o modelo do agente selecionado; o indicador geral de IA pronta exige a chave e os dois modelos. Reinicie o servidor após alterar a configuração.
 
 ## Ativar o Supabase
 
@@ -123,7 +126,13 @@ Cada avaliação guarda versões dos dados, das regras e do cálculo, instante, 
 
 **Agente 2 — Preparar abordagem:** exige produto e canal; pessoa é opcional. Usa o produto selecionado, dados aprovados, notas, sinais e oportunidades. Gera assunto quando aplicável, mensagem, justificativa e evidências. O usuário pode editar, aprovar, recusar e copiar a mensagem aprovada. **O aplicativo não envia mensagens.**
 
-Prompts fixos e versionados estão em `src/lib/server/agent-steps.ts`. Saídas são validadas no servidor. Campos não autorizados, categorias inválidas e evidências fora do contexto são rejeitados. Conteúdo de CSV e sinais é tratado como dados, nunca como instruções.
+Cada agente tem seu prompt em destaque no início do arquivo, seguido da versão, da variável de modelo e da função de execução:
+
+- [Analisar sinais](src/lib/server/agents/signals.ts).
+- [Preparar abordagem](src/lib/server/agents/outreach.ts).
+- [Instruções compartilhadas](src/lib/server/agents/shared.ts): idioma, evidências e tratamento de dados não confiáveis.
+
+A extração preserva os prompts `signals-v1` e `outreach-v1`. Ao mudar as instruções, atualize a versão correspondente para manter a rastreabilidade. `src/lib/server/agent-steps.ts` mantém as etapas de execução, tentativas, auditoria e persistência. Saídas são validadas no servidor. Campos não autorizados, categorias inválidas e evidências fora do contexto são rejeitados. Conteúdo de CSV e sinais é tratado como dados, nunca como instruções.
 
 Vercel Workflow executa lotes de até três empresas em paralelo. Apenas um lote fica ativo por workspace. A etapa de inferência tem uma repetição, além de uma repetição interna do provedor; as chamadas têm timeout de 60 segundos e limite de saída. Entradas, modelo, prompt, tentativas, horários, resultado e decisão ficam registrados. Não há treinamento automático.
 
@@ -133,10 +142,14 @@ O botão **Execuções**, disponível em todas as páginas, abre um painel à di
 
 Depois que o lote e seus itens terminam e todas as revisões geradas são aprovadas ou recusadas, **Arquivar execução** remove o lote da fila de toda a equipe. Falhas sem revisões pendentes também podem ser arquivadas. O histórico permanece disponível em **Empresa → Execuções**, com as etapas, decisões e dados de auditoria preservados. Empresas excluídas do lote não recebem esse lote em seu histórico. Arquivamento é manual e usa os registros JSON existentes, sem migração adicional.
 
+A tela não sobrepõe consultas de atualização. Se uma consulta falhar, mantém os últimos dados e informa o horário da última atualização; isso não significa que o agente parou. Leituras da base têm limite de 20 segundos e uma repetição em falhas temporárias. Erros distinguem rede/DNS, timeout, credenciais, indisponibilidade e estrutura ausente. A indicação de migrações aparece somente para erros de função, tabela ou coluna ausente.
+
+Os erros exibem operação e código sem expor chaves, prompts, corpos de resposta ou dados internos. Falhas dos agentes ficam associadas à etapa e à tentativa; os IDs de execução e workflow ajudam a localizar os logs. Se a própria base estiver indisponível durante o registro da falha, os detalhes permanecem nos logs do servidor até que o armazenamento volte a responder. O histórico de etapas usa os registros JSON existentes, sem migração SQL adicional.
+
 ## Publicar na Vercel
 
 1. Crie ou selecione um projeto Vercel para esta pasta/repositório, com framework **Next.js**.
-2. Adicione as cinco variáveis acima nos ambientes desejados.
+2. Adicione as seis variáveis acima nos ambientes desejados.
 3. Habilite **Enable access to System Environment Variables** nas configurações do projeto; o Workflow usa `VERCEL_DEPLOYMENT_ID` para escolher o armazenamento e a fila duráveis da Vercel.
 4. Publique pelo painel ou com `npx vercel deploy`; use `--prod` quando estiver pronto para produção.
 5. Configure a URL publicada nas opções de Auth do Supabase.
@@ -170,6 +183,13 @@ Para o volume do hackathon, as operações leem um snapshot do workspace e grava
 
 A auditoria de dependências encontrou uma cadeia transitiva do adaptador Nest do pacote Workflow envolvendo `http-cache-semantics` (GHSA-ch52-4w7c-c8xp), sem correção publicada na versão consultada. O aplicativo usa o adaptador Next.js; essa cadeia não participa das rotas implementadas. Correções compatíveis de `devalue` e `nanoid` estão fixadas por overrides. Reavalie `npm audit` antes da publicação; a entrega não declara ausência de vulnerabilidades.
 
+### Recuperação de execuções dos agentes
+
+A geração e a gravação são etapas duráveis independentes: uma falha ao salvar não repete a chamada à IA. Cada tentativa de IA tem limite total de 60 segundos, sem retries internos do SDK; o workflow permite apenas uma nova tentativa para falhas temporárias (timeout, rede, 429 ou 5xx). Falhas de configuração, autenticação e validação encerram a empresa. Gravações e leituras da base têm limite de 20 segundos; conflitos recalculam a alteração a partir de uma versão atualizada.
+
+Para uma execução antiga cujo workflow já terminou, envie `POST /api/agents/reconcile` com `{ "id": "ID_DA_EXECUCAO" }` em uma sessão autenticada. A reconciliação não retoma a IA: sincroniza cancelamento, conclusão ou falha com o histórico do workflow. Se o workflow ainda estiver ativo, a resposta informa isso; use o botão **Cancelar execução** para interrompê-lo.
+
+Os logs `database_operation` e `agent_generation` incluem operação, duração, tentativa, código e identificadores, sem prompts, dados comerciais ou credenciais.
 
 ### Workspace conflict retry storms
 

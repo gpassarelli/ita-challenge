@@ -188,6 +188,13 @@ export function WorkspaceApp({
             : "Alterações salvas.",
     );
   };
+  const cancelRun = async (run: AgentRun) => {
+    const result = await api("/api/agents/cancel", { id: run.id });
+    setState(result.state);
+    setNotice(
+      "Execução cancelada. Resultados já concluídos foram preservados.",
+    );
+  };
   const resumeRun = async (run: AgentRun) => {
     try {
       const result = await api("/api/agents", {
@@ -1228,6 +1235,7 @@ export function WorkspaceApp({
           onClose={() => setExecutionTarget(null)}
           onSave={save}
           onResume={resumeRun}
+          onCancel={cancelRun}
           onReturnCompany={(id) => {
             setExecutionTarget(null);
             setDetailTab("Execuções");

@@ -9,7 +9,10 @@ import {
   commandSchema,
   agentRequestSchema,
 } from "../../src/lib/domain/commands";
-import { queueAgentRun } from "../../src/lib/domain/agent-run-mutations";
+import {
+  cancelAgentRun,
+  queueAgentRun,
+} from "../../src/lib/domain/agent-run-mutations";
 import { evaluationDate } from "../../src/lib/domain/types";
 import { criterionAlternatives } from "../../src/lib/domain/scoring";
 import {
@@ -53,6 +56,9 @@ async function mount(page: Page, state: Workspace = emptyWorkspace()) {
       if (path === "/api/score-history") {
         await route.fulfill({ json: { history: [] } });
         return;
+      }
+      if (path === "/api/agents/cancel") {
+        cancelAgentRun(state, actor, data.id);
       }
       if (path === "/api/agents") {
         const shouldRun = queueAgentRun(
@@ -1579,4 +1585,51 @@ test("revisão agrupa justificativa e evidências por alteração sem comentári
     path: testInfo.outputPath("review-grouped-mobile.png"),
     fullPage: true,
   });
+});
+
+test("cancela uma execução ativa no painel e permite arquivar", async ({
+  page,
+}) => {
+  const state = emptyWorkspace();
+  const c = company(state);
+  const execution = run(c, {
+    status: "running",
+    items: [
+      {
+        companyId: c.id,
+        status: "running",
+        error: null,
+        revisionId: null,
+        steps: [
+          {
+            phase: "validating",
+            status: "running",
+            attempt: 1,
+            startedAt: new Date().toISOString(),
+          },
+        ],
+      },
+    ],
+  });
+  state.runs.push(execution);
+  await mount(page, state);
+  await page
+    .getByRole("button", { name: "Abrir execuções", exact: true })
+    .click();
+  const panel = page.getByRole("dialog");
+  await panel.getByRole("button", { name: /Analisar sinais/ }).click();
+  await panel
+    .getByRole("button", { name: "Cancelar execução", exact: true })
+    .click();
+  await expect(
+    panel.getByText("Cancelada", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Cancelar execução", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    panel.getByRole("button", { name: "Arquivar execução", exact: true }),
+  ).toBeEnabled();
+  expect(execution.status).toBe("cancelled");
+  expect(execution.items[0].steps?.[0].status).toBe("cancelled");
 });

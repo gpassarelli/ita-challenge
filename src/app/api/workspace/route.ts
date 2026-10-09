@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/server/supabase";
 import { mutateWorkspace, readWorkspace } from "@/lib/server/store";
 import { needsRecalculation } from "@/lib/domain/scoring";
+import { agentsReady } from "@/lib/server/agents";
 import { errorResponse } from "@/lib/server/http";
 export async function GET() {
   try {
@@ -14,9 +15,7 @@ export async function GET() {
       {
         state,
         user: { id: user.id, email: user.email },
-        aiReady: Boolean(
-          process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL,
-        ),
+        aiReady: agentsReady(),
       },
       { headers: { "Cache-Control": "private, no-store" } },
     );
