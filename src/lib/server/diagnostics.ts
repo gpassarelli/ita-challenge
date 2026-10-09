@@ -16,6 +16,8 @@ export function databaseError(
     | "read_workspace"
     | "commit_workspace"
     | "commit_workspace_patch"
+    | "read_agent_context"
+    | "commit_agent_patch"
     | "read_agent_run",
   error: { code?: string; message?: string; details?: string },
   status = 0,
@@ -24,6 +26,12 @@ export function databaseError(
     ? error.code!
     : "DATABASE_ERROR";
   const detail = `${error.message ?? ""} ${error.details ?? ""}`;
+  if (code === "PT422" && /PENDING_REVISION/.test(detail))
+    return new ServiceError(
+      new PendingDataRevisionError().message,
+      operation,
+      "PENDING_REVISION",
+    );
   if (/ENOTFOUND|EAI_AGAIN/.test(detail))
     return new ServiceError(
       "Não foi possível localizar o servidor da base. Verifique a rede e a URL do Supabase.",
