@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import type { Workspace, Revision } from "@/lib/domain/types";
 import { contactKind, contactLabel } from "@/lib/domain/values";
-import { fieldsFor } from "@/lib/domain/catalog";
+import { DATASETS, fieldsFor, isDataset } from "@/lib/domain/catalog";
 import type { UserCommand } from "@/lib/domain/commands";
 import { display, dateBR, cn } from "@/lib/utils";
 import { Button } from "./ui/button";
@@ -304,6 +304,69 @@ export function ReviewContent({
         : (revision.message?.evidenceIds ?? []),
     ),
   ];
+  const renderEvidence = (ids: string[], field?: string) => (
+    <div className="mt-3 space-y-3">
+      {[...new Set(ids)].map((id) => {
+        const captured = snapshots.find((r) => r.id === id);
+        const current = state.records.find((r) => r.id === id);
+        const data = captured?.data ?? current?.data;
+        const dataset = captured?.type ?? current?.dataset;
+        const fields = dataset && isDataset(dataset) ? fieldsFor(dataset) : [];
+        return (
+          <div key={id} className="rounded bg-neutral-50 p-3 text-xs">
+            <p className="font-medium">
+              {field ? (
+                dataset && isDataset(dataset) ? (
+                  DATASETS[dataset].singular
+                ) : (
+                  "Registro"
+                )
+              ) : (
+                <>
+                  {dataset} · {current?.externalKey ?? id}
+                </>
+              )}
+            </p>
+            <p className="mt-1 leading-relaxed text-neutral-600">
+              {data
+                ? !field
+                  ? Object.entries(data)
+                      .filter(([, v]) => v !== null)
+                      .map(([k, v]) => k + ": " + display(v as string))
+                      .join(" · ")
+                  : fields
+                      .filter((f) =>
+                        field && dataset === "Prospects"
+                          ? f.key === field
+                          : !f.hidden &&
+                            ![
+                              "external_id",
+                              "company_external_id",
+                              "company_name",
+                            ].includes(f.key),
+                      )
+                      .filter(
+                        (f) =>
+                          data[f.key] !== null &&
+                          data[f.key] !== undefined &&
+                          data[f.key] !== "",
+                      )
+                      .map(
+                        (f) => f.label + ": " + display(data[f.key] as string),
+                      )
+                      .join(" · ") || "Sem detalhes adicionais no registro."
+                : "Registro não encontrado"}
+            </p>
+            <p className="mt-1 text-neutral-400">
+              {captured
+                ? "Contexto preservado da análise · versão " + captured.version
+                : "Cadastro atual · contexto original indisponível"}
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
   return (
     <>
       <div className="mb-4 flex flex-wrap gap-2">
@@ -328,18 +391,21 @@ export function ReviewContent({
         <Badge>{revision.model}</Badge>
         {revision.edited && <Badge>Aprovada com edição</Badge>}
       </div>
-      <p className="mb-4 text-sm leading-relaxed text-neutral-600">
-        {revision.explanation}
-      </p>
-      {revision.warnings.map((w, i) => (
-        <div
-          key={i}
-          className="mb-2 flex gap-2 rounded bg-amber-50 p-3 text-xs text-amber-800"
-        >
-          <AlertCircle size={15} className="shrink-0" />
-          {w}
-        </div>
-      ))}
+      {revision.type === "message" && (
+        <p className="mb-4 text-sm leading-relaxed text-neutral-600">
+          {revision.explanation}
+        </p>
+      )}
+      {revision.type === "message" &&
+        revision.warnings.map((w, i) => (
+          <div
+            key={i}
+            className="mb-2 flex gap-2 rounded bg-amber-50 p-3 text-xs text-amber-800"
+          >
+            <AlertCircle size={15} className="shrink-0" />
+            {w}
+          </div>
+        ))}
       {revision.type === "data" ? (
         <div className="space-y-3">
           {stale && revision.status === "pending" && (
@@ -347,8 +413,7 @@ export function ReviewContent({
           )}
           {!revision.changes.length && (
             <p className="rounded border border-neutral-200 p-4 text-sm text-neutral-500">
-              O agente não encontrou alterações sustentadas por evidências
-              suficientes.
+              Nenhuma alteração proposta.
             </p>
           )}
           {revision.changes.map((c) => (
@@ -372,6 +437,8 @@ export function ReviewContent({
               <p className="text-xs leading-relaxed text-neutral-500">
                 {c.reason}
               </p>
+              <p className="mt-3 text-xs font-medium">Evidências</p>
+              {renderEvidence(c.evidenceIds, c.field)}
             </div>
           ))}
         </div>
@@ -432,40 +499,14 @@ export function ReviewContent({
           )}
         </div>
       )}
-      <details className="mt-5 rounded-lg border border-neutral-200 p-4">
-        <summary className="cursor-pointer text-sm font-medium">
-          Evidências utilizadas · {evidenceIds.length}
-        </summary>
-        <div className="mt-3 space-y-3">
-          {evidenceIds.map((id) => {
-            const captured = snapshots.find((r) => r.id === id);
-            const current = state.records.find((r) => r.id === id);
-            const data = captured?.data ?? current?.data;
-            return (
-              <div key={id} className="rounded bg-neutral-50 p-3 text-xs">
-                <p className="font-medium">
-                  {captured?.type ?? current?.dataset} ·{" "}
-                  {current?.externalKey ?? id}
-                </p>
-                <p className="mt-1 leading-relaxed text-neutral-500">
-                  {data
-                    ? Object.entries(data)
-                        .filter(([, v]) => v !== null)
-                        .map(([k, v]) => k + ": " + display(v as string))
-                        .join(" · ")
-                    : "Registro não encontrado"}
-                </p>
-                <p className="mt-1 text-neutral-400">
-                  {captured
-                    ? "Contexto preservado da análise · versão " +
-                      captured.version
-                    : "Cadastro atual · contexto original indisponível"}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-      </details>
+      {revision.type === "message" && (
+        <details className="mt-5 rounded-lg border border-neutral-200 p-4">
+          <summary className="cursor-pointer text-sm font-medium">
+            Evidências utilizadas · {evidenceIds.length}
+          </summary>
+          {renderEvidence(evidenceIds)}
+        </details>
+      )}
       <details className="mt-3 rounded border border-neutral-200 p-3 text-xs">
         <summary className="cursor-pointer">
           Contexto e auditoria da análise
@@ -474,6 +515,14 @@ export function ReviewContent({
           Solicitado por {revision.createdBy} · {dateBR(revision.createdAt)} ·
           Execução {revision.runId}
         </p>
+        {revision.type === "data" && (
+          <div className="mt-3 space-y-2 text-neutral-500">
+            <p>{revision.explanation}</p>
+            {revision.warnings.map((warning, i) => (
+              <p key={i}>{warning}</p>
+            ))}
+          </div>
+        )}
         <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded bg-neutral-50 p-3 text-[10px]">
           {JSON.stringify(revision.input, null, 2)}
         </pre>

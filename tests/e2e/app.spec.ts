@@ -1474,3 +1474,109 @@ test("fila lista execuções antigas com carregar mais e preserva revisão na p�
     page.getByRole("dialog").getByText("Aprovada", { exact: true }),
   ).toBeVisible();
 });
+
+test("revisão agrupa justificativa e evidências por alteração sem comentários gerais", async ({
+  page,
+}, testInfo) => {
+  const state = emptyWorkspace();
+  const c = company(state, {
+    name: "Empresa com propostas",
+    growth: "Médio",
+    multi_region: "Não",
+    employer_branding: "Baixo",
+  });
+  const expansion = saveRecord(state, actor, "Sinais_Publicos", {
+    company_external_id: c.externalKey,
+    signal_type: "Expansão",
+    evidence: "Abertura de unidade",
+    source: "Site institucional",
+  });
+  const region = saveRecord(state, actor, "Sinais_Publicos", {
+    company_external_id: c.externalKey,
+    signal_type: "Expansão regional",
+    evidence: "Entrada em nova região",
+  });
+  const pending = revision(c, {
+    explanation: "Employer branding permanece inalterado.",
+    warnings: ["Não há dados sobre a renovação."],
+    changes: [
+      {
+        field: "growth",
+        before: "Médio",
+        after: "Alto",
+        reason: "A abertura de unidade sugere crescimento.",
+        evidenceIds: [expansion.id],
+      },
+      {
+        field: "multi_region",
+        before: "Não",
+        after: "Sim",
+        reason: "A expansão regional sugere atuação em mais de uma região.",
+        evidenceIds: [region.id],
+      },
+    ],
+    input: {
+      company: {
+        id: c.id,
+        type: c.dataset,
+        version: c.version,
+        data: { ...c.data },
+      },
+      records: [expansion, region].map((r) => ({
+        id: r.id,
+        type: r.dataset,
+        version: r.version,
+        data: { ...r.data },
+      })),
+    },
+  });
+  state.revisions.push(pending);
+  expansion.data.evidence = "Texto alterado após a análise";
+  await mount(page, state);
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /^Revisões/ })
+    .click();
+  await page
+    .getByRole("button", {
+      name: /Empresa com propostas.*alterações propostas/,
+    })
+    .click();
+  const dialog = page.getByRole("dialog");
+  const growth = dialog
+    .getByRole("heading", { name: "Sinal crescimento", exact: true })
+    .locator("..");
+  const regions = dialog
+    .getByRole("heading", { name: "Multi-região", exact: true })
+    .locator("..");
+  await expect(growth.getByText(pending.changes[0].reason)).toBeVisible();
+  await expect(
+    growth.getByText("Evidência fictícia: Abertura de unidade", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(
+    growth.getByText("Entrada em nova região", { exact: false }),
+  ).toHaveCount(0);
+  await expect(regions.getByText(pending.changes[1].reason)).toBeVisible();
+  await expect(
+    regions.getByText("Evidência fictícia: Entrada em nova região", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(dialog.getByText(pending.explanation)).not.toBeVisible();
+  await expect(dialog.getByText(pending.warnings[0])).not.toBeVisible();
+  await expect(
+    dialog.getByText("Texto alterado após a análise", { exact: false }),
+  ).toHaveCount(0);
+  await expect(
+    dialog.locator("summary").filter({ hasText: "Evidências utilizadas" }),
+  ).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(growth.getByText(pending.changes[0].reason)).toBeVisible();
+  await expect(regions.getByText(pending.changes[1].reason)).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("review-grouped-mobile.png"),
+    fullPage: true,
+  });
+});
