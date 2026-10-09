@@ -125,6 +125,12 @@ Prompts fixos e versionados estão em `src/lib/server/agent-steps.ts`. Saídas s
 
 Vercel Workflow executa lotes de até três empresas em paralelo. Apenas um lote fica ativo por workspace. A etapa de inferência tem uma repetição, além de uma repetição interna do provedor; as chamadas têm timeout de 60 segundos e limite de saída. Entradas, modelo, prompt, tentativas, horários, resultado e decisão ficam registrados. Não há treinamento automático.
 
+### Progresso e diagnóstico
+
+O botão **Execuções**, disponível em todas as páginas, abre um painel à direita que permite acompanhar os agentes e revisar seus resultados. No desktop, o painel permanece aberto enquanto você trabalha na página; no celular, ocupa a tela e pode ser fechado com Escape. Iniciar um agente abre o lote no painel sem mudar de página. A página **Revisões** mantém os filtros, métricas e histórico, além de oferecer acesso ao mesmo painel. A barra mostra a proporção de empresas finalizadas (sucessos + falhas), e não uma estimativa da geração de texto. Abra uma empresa para ver preparação dos dados, resposta da IA, validação e gravação da revisão, com duração, tentativa, modelo e versão do prompt. Lotes parcialmente bem-sucedidos aparecem como **Concluída com falhas**. Execuções anteriores continuam legíveis, mas não recebem etapas retroativas.
+
+Depois que o lote e seus itens terminam e todas as revisões geradas são aprovadas ou recusadas, **Arquivar execução** remove o lote da fila de toda a equipe. Falhas sem revisões pendentes também podem ser arquivadas. O histórico permanece disponível em **Empresa → Execuções**, com as etapas, decisões e dados de auditoria preservados. Empresas excluídas do lote não recebem esse lote em seu histórico. Arquivamento é manual e usa os registros JSON existentes, sem migração adicional.
+
 ## Publicar na Vercel
 
 1. Crie ou selecione um projeto Vercel para esta pasta/repositório, com framework **Next.js**.

@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
+import { agentEligibility } from "@/lib/domain/agent-runs";
 import {
   Sparkles,
   Check,
@@ -26,13 +27,15 @@ export function AgentDialog({
   open,
   onClose,
   onStarted,
+  onReview,
 }: {
   agent: "signals" | "outreach";
   companyIds: string[];
   state: Workspace;
   open: boolean;
   onClose: () => void;
-  onStarted: (state: Workspace) => void;
+  onStarted: (state: Workspace, runId: string) => void;
+  onReview: (id: string) => void;
 }) {
   const [productId, setProductId] = useState("");
   const [contactId, setContactId] = useState("");
@@ -40,6 +43,7 @@ export function AgentDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [id] = useState(() => crypto.randomUUID());
+  const eligibility = agentEligibility(state, agent, companyIds);
   const products = state.records.filter((r) => r.dataset === "Portfolio");
   const contacts = state.records.filter(
     (r) =>
@@ -59,7 +63,7 @@ export function AgentDialog({
         contactId: contactId || null,
         channel,
       });
-      onStarted(result.state);
+      onStarted(result.state, result.runId);
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -145,32 +149,104 @@ export function AgentDialog({
           </p>
         </div>
       )}
+      {agent === "signals" && (
+        <div className="mt-4 space-y-3 text-xs">
+          <p className="font-medium">
+            {eligibility.companyIds.length} empresa(s) apta(s) para análise
+          </p>
+          <ul className="space-y-1 text-neutral-600">
+            {eligibility.companyIds.map((id) => (
+              <li key={id}>
+                {display(state.records.find((r) => r.id === id)?.data.name)}
+              </li>
+            ))}
+          </ul>
+          {eligibility.skippedCompanies.length > 0 && (
+            <p className="text-amber-800">
+              As empresas abaixo não serão executadas porque têm revisões de
+              dados pendentes.
+            </p>
+          )}
+          {eligibility.skippedCompanies.map((entry) => (
+            <div
+              key={entry.companyId}
+              className="rounded border border-amber-200 bg-amber-50 p-3"
+            >
+              <p>
+                {display(
+                  state.records.find((r) => r.id === entry.companyId)?.data
+                    .name,
+                )}
+              </p>
+              {entry.revisionIds.map((id) => (
+                <Button
+                  key={id}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onReview(id)}
+                >
+                  Revisar pendência
+                </Button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
       <ErrorNote message={error} />
       <div className="mt-6 flex justify-end gap-2">
         <Button variant="outline" onClick={onClose}>
           Cancelar
         </Button>
         <Button
-          disabled={busy || (agent === "outreach" && !productId)}
+          disabled={
+            busy ||
+            !eligibility.companyIds.length ||
+            (agent === "outreach" && !productId)
+          }
           onClick={start}
         >
           {busy ? <Loader2 className="animate-spin" /> : <Sparkles />}Executar
-          agente
+          agente · {eligibility.companyIds.length} empresa(s)
         </Button>
       </div>
     </Dialog>
   );
 }
-export function ReviewDialog({
+export function ReviewDialog(
+  props: ComponentProps<typeof ReviewContent> & { open: boolean },
+) {
+  const company = props.state.records.find(
+    (r) => r.id === props.revision.companyId,
+  );
+  return (
+    <Dialog
+      open={props.open}
+      onOpenChange={(v) => !v && props.onClose()}
+      title={
+        props.revision.type === "data"
+          ? "Revisão de dados"
+          : "Revisão da mensagem"
+      }
+      description={
+        String(company?.data.name ?? "Empresa") +
+        " · " +
+        dateBR(props.revision.createdAt)
+      }
+      wide
+    >
+      <ReviewContent key={props.revision.id} {...props} />
+    </Dialog>
+  );
+}
+
+export function ReviewContent({
   revision,
   state,
-  open,
   onClose,
   onSave,
 }: {
   revision: Revision;
   state: Workspace;
-  open: boolean;
   onClose: () => void;
   onSave: (command: UserCommand) => Promise<void>;
 }) {
@@ -229,19 +305,7 @@ export function ReviewDialog({
     ),
   ];
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(v) => !v && onClose()}
-      title={
-        revision.type === "data" ? "Revisão de dados" : "Revisão da mensagem"
-      }
-      description={
-        String(company?.data.name ?? "Empresa") +
-        " · " +
-        dateBR(revision.createdAt)
-      }
-      wide
-    >
+    <>
       <div className="mb-4 flex flex-wrap gap-2">
         <Badge
           tone={
@@ -279,7 +343,7 @@ export function ReviewDialog({
       {revision.type === "data" ? (
         <div className="space-y-3">
           {stale && revision.status === "pending" && (
-            <ErrorNote message="A empresa mudou após a análise. Recuse esta revisão ou gere uma nova análise antes de aprovar." />
+            <ErrorNote message="A empresa mudou após a análise. Recuse esta revisão desatualizada antes de executar o agente novamente." />
           )}
           {!revision.changes.length && (
             <p className="rounded border border-neutral-200 p-4 text-sm text-neutral-500">
@@ -453,6 +517,6 @@ export function ReviewDialog({
         </>
       )}
       <ErrorNote message={revision.status !== "pending" ? error : ""} />
-    </Dialog>
+    </>
   );
 }

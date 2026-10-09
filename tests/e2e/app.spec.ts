@@ -5,7 +5,11 @@ import { DATASETS, type Dataset } from "../../src/lib/domain/catalog";
 import { executeCommand } from "../../src/lib/domain/execute";
 import { previewCSV } from "../../src/lib/domain/csv";
 import { importPreview, saveRecord } from "../../src/lib/domain/mutations";
-import { commandSchema } from "../../src/lib/domain/commands";
+import {
+  commandSchema,
+  agentRequestSchema,
+} from "../../src/lib/domain/commands";
+import { queueAgentRun } from "../../src/lib/domain/agent-run-mutations";
 import { evaluationDate } from "../../src/lib/domain/types";
 import { criterionAlternatives } from "../../src/lib/domain/scoring";
 import {
@@ -16,6 +20,7 @@ import {
   product,
   activate,
   criterion,
+  run,
 } from "../fixtures";
 async function mount(page: Page, state: Workspace = emptyWorkspace()) {
   await page.route("http://localhost:4174/api/**", async (route) => {
@@ -50,32 +55,61 @@ async function mount(page: Page, state: Workspace = emptyWorkspace()) {
         return;
       }
       if (path === "/api/agents") {
-        const company = state.records.find((r) => r.id === data.companyIds[0])!;
-        if (data.agent === "signals") state.revisions.push(revision(company));
-        else {
-          const product = state.records.find((r) => r.id === data.productId)!;
-          if (!product) throw new Error("Produto obrigatório");
-          const message = {
-            subject: "Conversa sobre " + product.data.name,
-            body: "Mensagem original de teste para a equipe.",
-            rationale:
-              "Proposta do produto selecionado: " +
-              product.data.value_proposition,
-            evidenceIds: [company.id, product.id],
-            warnings: [],
-            productId: product.id,
-            contactId: null,
-            channel: data.channel,
-          };
-          state.revisions.push(
-            revision(company, {
-              type: "message",
-              changes: [],
-              message,
-              originalMessage: structuredClone(message),
-            }),
-          );
+        const shouldRun = queueAgentRun(
+          state,
+          actor,
+          agentRequestSchema.parse(data),
+        );
+        const execution = state.runs.find((r) => r.id === data.id)!;
+        if (shouldRun) {
+          for (const item of execution.items) {
+            const prospect = state.records.find(
+              (r) => r.id === item.companyId,
+            )!;
+            let result = revision(prospect, { runId: execution.id });
+            if (data.agent === "outreach") {
+              const selectedProduct = state.records.find(
+                (r) => r.id === data.productId,
+              )!;
+              if (!selectedProduct) throw new Error("Produto obrigatório");
+              const message = {
+                subject: "Conversa sobre " + selectedProduct.data.name,
+                body: "Mensagem original de teste para a equipe.",
+                rationale:
+                  "Proposta do produto selecionado: " +
+                  selectedProduct.data.value_proposition,
+                evidenceIds: [prospect.id, selectedProduct.id],
+                warnings: [],
+                productId: selectedProduct.id,
+                contactId: null,
+                channel: data.channel,
+              };
+              result = revision(prospect, {
+                runId: execution.id,
+                type: "message",
+                changes: [],
+                message,
+                originalMessage: structuredClone(message),
+              });
+            }
+            state.revisions.push(result);
+            item.status = "completed";
+            item.revisionId = result.id;
+            item.finishedAt = new Date().toISOString();
+          }
+          execution.status = "completed";
+          execution.workflowId = "workflow-" + execution.id;
+          execution.finishedAt = new Date().toISOString();
+          state.version++;
         }
+        await route.fulfill({
+          json: {
+            state,
+            runId: execution.id,
+            skippedCompanies: execution.skippedCompanies ?? [],
+          },
+        });
+        return;
       }
       await route.fulfill({
         json: {
@@ -361,11 +395,14 @@ test("cadastro, CSV, regras, lista dinâmica, Kanban e aprovação pela interfac
     .getByRole("button", { name: "Analisar sinais", exact: true })
     .click();
   await page.getByRole("button", { name: "Executar agente" }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Empresas", exact: true }),
+  ).toBeVisible();
   await page
-    .getByRole("button", { name: /Empresa isolada E2E.*alterações propostas/ })
+    .getByRole("button", { name: "Revisar resultado", exact: true })
     .click();
   await page.getByRole("button", { name: "Aprovar revisão inteira" }).click();
+  await page.getByRole("button", { name: "Fechar execuções" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(state.revisions[0].status).toBe("approved");
   expect(
@@ -410,9 +447,8 @@ test("cadastro, CSV, regras, lista dinâmica, Kanban e aprovação pela interfac
     .getByLabel("Produto do portfólio *")
     .selectOption(state.records.find((r) => r.dataset === "Portfolio")!.id);
   await page.getByRole("button", { name: "Executar agente" }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
   await page
-    .getByRole("button", { name: /Empresa isolada E2E.*Mensagem de abordagem/ })
+    .getByRole("button", { name: "Revisar resultado", exact: true })
     .click();
   await page
     .getByRole("dialog")
@@ -421,6 +457,7 @@ test("cadastro, CSV, regras, lista dinâmica, Kanban e aprovação pela interfac
   await page
     .getByRole("button", { name: "Aprovar mensagem", exact: true })
     .click();
+  await page.getByRole("button", { name: "Fechar execuções" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   const messageRevision = state.revisions.find((r) => r.type === "message")!;
   expect(messageRevision.edited).toBe(true);
@@ -925,4 +962,515 @@ test("regras antigas reabrem sem perder condição e falta de dados rende zero",
     coverage: 0,
     status: "insufficient",
   });
+});
+
+test("progresso mostra etapas, falhas parciais e execuções antigas em desktop e celular", async ({
+  page,
+}, testInfo) => {
+  const state = emptyWorkspace();
+  const first = company(state, { name: "Empresa Alfa" });
+  const second = company(state, { name: "Empresa Beta" });
+  const startedAt = new Date(Date.now() - 15000).toISOString();
+  const execution = run(first, {
+    companyIds: [first.id, second.id],
+    status: "running",
+    workflowId: "workflow-progress-test",
+    items: [
+      {
+        companyId: first.id,
+        status: "running",
+        error: null,
+        revisionId: null,
+        attempts: 1,
+        startedAt,
+        model: "modelo-teste",
+        promptVersion: "signals-v1",
+        steps: [
+          {
+            phase: "preparing",
+            status: "completed",
+            attempt: 1,
+            startedAt,
+            finishedAt: startedAt,
+          },
+          { phase: "generating", status: "running", attempt: 1, startedAt },
+        ],
+      },
+      { companyId: second.id, status: "queued", error: null, revisionId: null },
+    ],
+  });
+  state.runs.push(execution);
+  await mount(page, state);
+  await page
+    .getByRole("button", { name: "Abrir execuções", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: /Analisar sinais/ })
+    .click();
+  await expect(
+    page.getByText("0 de 2 empresas finalizadas · 0%"),
+  ).toBeVisible();
+  await expect(page.getByRole("progressbar")).toHaveAttribute("value", "0");
+  await page.locator("summary").filter({ hasText: "Empresa Alfa" }).click();
+  await expect(
+    page.getByText("Preparando dados", { exact: false }).last(),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Modelo: modelo-teste · Prompt: signals-v1"),
+  ).toBeVisible();
+  await page
+    .getByText("Identificação para diagnóstico", { exact: true })
+    .click();
+  await expect(
+    page.getByText("Workflow: workflow-progress-test"),
+  ).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("progress-desktop.png"),
+    fullPage: true,
+  });
+  execution.items[0].status = "completed";
+  execution.items[0].finishedAt = new Date().toISOString();
+  execution.items[0].steps![1].status = "completed";
+  execution.items[0].steps![1].finishedAt = new Date().toISOString();
+  execution.items[1].status = "failed";
+  execution.items[1].error =
+    "A IA excedeu o tempo de resposta. Código: AI_TIMEOUT.";
+  execution.status = "completed";
+  execution.finishedAt = new Date().toISOString();
+  await expect(page.getByText("Concluída com falhas")).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(
+    page.getByText("2 de 2 empresas finalizadas · 100%"),
+  ).toBeVisible();
+  await page.locator("summary").filter({ hasText: "Empresa Beta" }).click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "AI_TIMEOUT" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Esta execução não possui histórico detalhado de etapas."),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("progressbar")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("progress-mobile.png"),
+    fullPage: true,
+  });
+});
+
+test("atualização lenta não sobrepõe consultas e preserva os dados após erro", async ({
+  page,
+}) => {
+  const state = emptyWorkspace();
+  const prospect = company(state, { name: "Empresa preservada" });
+  state.runs.push(
+    run(prospect, {
+      status: "running",
+      items: [
+        {
+          companyId: prospect.id,
+          status: "running",
+          error: null,
+          revisionId: null,
+        },
+      ],
+    }),
+  );
+  await mount(page, state);
+  let calls = 0;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("http://localhost:4174/api/workspace", async (route) => {
+    calls++;
+    await blocked;
+    await route.fulfill({
+      status: 503,
+      json: {
+        error:
+          "Conexão interrompida. Etapa: read_workspace. Código: NETWORK_ERROR.",
+      },
+    });
+  });
+  await expect.poll(() => calls, { timeout: 6000 }).toBe(1);
+  await page.waitForTimeout(4500);
+  expect(calls).toBe(1);
+  release();
+  await expect(page.getByRole("alert")).toContainText("NETWORK_ERROR");
+  await expect(
+    page.getByText(/Mantivemos os últimos dados recebidos/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "Empresa preservada", exact: true }),
+  ).toBeVisible();
+});
+
+async function openExecution(page: Page, companyName?: string) {
+  await page
+    .getByRole("button", { name: "Abrir execuções", exact: true })
+    .click();
+  const panel = page.getByRole("dialog");
+  await panel
+    .getByRole("button", {
+      name: companyName
+        ? new RegExp(companyName)
+        : /Analisar sinais|Preparar abordagem/,
+    })
+    .first()
+    .click();
+  return panel;
+}
+
+test("lote exclui pendências, revisa no painel e arquiva no histórico das empresas", async ({
+  page,
+}, testInfo) => {
+  const state = emptyWorkspace();
+  const blocked = company(state, { name: "Empresa bloqueada" });
+  company(state, { name: "Empresa elegível Alfa" });
+  company(state, { name: "Empresa elegível Beta" });
+  state.revisions.push(revision(blocked));
+  await mount(page, state);
+  for (const name of [
+    "Empresa bloqueada",
+    "Empresa elegível Alfa",
+    "Empresa elegível Beta",
+  ])
+    await page.getByLabel("Selecionar " + name, { exact: true }).check();
+  await page
+    .getByRole("button", { name: "Analisar sinais", exact: true })
+    .click();
+  await expect(
+    page.getByText("2 empresa(s) apta(s) para análise"),
+  ).toBeVisible();
+  await expect(
+    page.getByText("As empresas abaixo não serão executadas", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Revisar pendência" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Executar agente · 2/ }).click();
+  const panel = page.getByRole("dialog");
+  await expect(
+    page.getByRole("heading", { name: "Empresas", exact: true }),
+  ).toBeVisible();
+  await expect(panel.getByText("Empresas não executadas · 1")).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Arquivar execução", exact: true }),
+  ).toBeDisabled();
+  expect(state.runs[0].items).toHaveLength(2);
+  // The underlying workspace stays usable while the panel is open.
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "Portfólio", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Portfólio", exact: true }),
+  ).toBeVisible();
+  await expect(panel).toBeVisible();
+  for (const [name, decision] of [
+    ["Empresa elegível Alfa", "approve"],
+    ["Empresa elegível Beta", "reject"],
+  ]) {
+    const item = panel
+      .locator("details")
+      .filter({ has: page.locator("summary", { hasText: name }) })
+      .last();
+    await item.locator("summary").first().click();
+    await item.getByRole("button", { name: "Revisar resultado" }).click();
+    if (decision === "approve")
+      await panel
+        .getByRole("button", { name: "Aprovar revisão inteira" })
+        .click();
+    else {
+      await panel
+        .getByLabel("Observação da revisão", { exact: false })
+        .fill("Evidência insuficiente");
+      await panel.getByRole("button", { name: "Recusar revisão" }).click();
+    }
+    await expect(
+      panel.getByRole("heading", { name: "Detalhes da execução" }),
+    ).toBeVisible();
+  }
+  await expect(
+    panel.getByText("0 revisões pendentes", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Abrir execuções" }),
+  ).toBeInViewport();
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const triggerBox = await page
+    .getByRole("button", { name: "Abrir execuções" })
+    .boundingBox();
+  const panelBox = await panel.boundingBox();
+  expect(triggerBox!.x + triggerBox!.width).toBeLessThanOrEqual(panelBox!.x);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.screenshot({
+    path: testInfo.outputPath("execution-panel-desktop.png"),
+    fullPage: true,
+  });
+  await panel
+    .getByRole("button", { name: "Arquivar execução", exact: true })
+    .click();
+  await expect(panel.getByText("Nenhuma execução por aqui.")).toBeVisible();
+  expect(state.runs[0].archivedBy).toBe(actor);
+  expect(
+    state.revisions.filter(
+      (r) => r.runId === state.runs[0].id && r.status === "pending",
+    ),
+  ).toHaveLength(0);
+  await panel.getByRole("button", { name: "Fechar execuções" }).click();
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "Empresas", exact: true })
+    .click();
+  await page
+    .getByRole("cell", { name: "Empresa elegível Alfa", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Execuções", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: /Analisar sinais.*Arquivada/ })
+    .click();
+  await expect(panel.getByText(/Arquivada em/)).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Ver revisão", exact: true }).first(),
+  ).toBeVisible();
+  await panel.getByRole("button", { name: "Voltar à empresa" }).click();
+  await expect(
+    page
+      .getByRole("dialog")
+      .getByRole("heading", { name: "Empresa elegível Alfa" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("dialog").getByText("Arquivada", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Fechar", exact: true })
+    .click();
+  await page
+    .getByRole("cell", { name: "Empresa bloqueada", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Execuções", exact: true })
+    .click();
+  await expect(
+    page.getByRole("dialog").getByText("Nenhuma execução por aqui."),
+  ).toBeVisible();
+});
+
+test("sinais bloqueados orientam recusar revisão desatualizada antes de executar", async ({
+  page,
+}) => {
+  const state = emptyWorkspace();
+  const c = company(state, { name: "Empresa com revisão" });
+  const r = revision(c, { companyVersion: c.version - 1 });
+  state.revisions.push(r);
+  await mount(page, state);
+  await page
+    .getByLabel("Selecionar Empresa com revisão", { exact: true })
+    .check();
+  await page
+    .getByRole("button", { name: "Analisar sinais", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: /Executar agente · 0/ }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "Revisar pendência" }).click();
+  await expect(
+    page.getByRole("button", { name: "Aprovar revisão inteira" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("Recuse esta revisão desatualizada", { exact: false }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Observação da revisão", { exact: false })
+    .fill("Cadastro mudou");
+  await page.getByRole("button", { name: "Recusar revisão" }).click();
+  await page.getByRole("button", { name: "Fechar execuções" }).click();
+  await page
+    .getByRole("button", { name: "Analisar sinais", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: /Executar agente · 1/ }),
+  ).toBeEnabled();
+});
+
+test("rascunho da revisão permanece durante atualização e navegação do workspace", async ({
+  page,
+}) => {
+  const state = emptyWorkspace();
+  const c = company(state, { name: "Empresa da mensagem" });
+  const p = product(state);
+  const execution = run(c, { agent: "outreach", status: "completed" });
+  const message = {
+    subject: "Assunto",
+    body: "Mensagem original",
+    rationale: "Contexto",
+    evidenceIds: [c.id],
+    warnings: [],
+    productId: p.id,
+    contactId: null,
+    channel: "E-mail",
+  };
+  const r = revision(c, {
+    runId: execution.id,
+    type: "message",
+    changes: [],
+    message,
+    originalMessage: structuredClone(message),
+  });
+  execution.items = [
+    { companyId: c.id, status: "completed", revisionId: r.id, error: null },
+  ];
+  state.runs.push(execution);
+  state.revisions.push(r);
+  await mount(page, state);
+  const panel = await openExecution(page);
+  await panel
+    .locator("summary")
+    .filter({ hasText: "Empresa da mensagem" })
+    .click();
+  await panel.getByRole("button", { name: "Revisar resultado" }).click();
+  await panel
+    .getByLabel("Mensagem", { exact: true })
+    .fill("Rascunho mantido após atualização");
+  await panel
+    .getByLabel("Observação da revisão", { exact: false })
+    .fill("Revisão em andamento");
+  const refreshed = page.waitForResponse((response) =>
+    response.url().endsWith("/api/workspace"),
+  );
+  await page.getByRole("button", { name: "Atualizar dados" }).click();
+  await refreshed;
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "Sinais", exact: true })
+    .click();
+  await expect(panel.getByLabel("Mensagem", { exact: true })).toHaveValue(
+    "Rascunho mantido após atualização",
+  );
+  await expect(
+    panel.getByLabel("Observação da revisão", { exact: false }),
+  ).toHaveValue("Revisão em andamento");
+  await panel.getByRole("button", { name: "Aprovar mensagem" }).click();
+  expect(state.revisions[0].message?.body).toBe(
+    "Rascunho mantido após atualização",
+  );
+  expect(state.revisions[0].originalMessage?.body).toBe("Mensagem original");
+});
+
+test("painel móvel mantém foco, fecha com Escape e permite arquivar falhas", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const state = emptyWorkspace();
+  const c = company(state, { name: "Empresa móvel" });
+  state.runs.push(
+    run(c, {
+      status: "failed",
+      items: [
+        {
+          companyId: c.id,
+          status: "failed",
+          error: "Falha de teste",
+          revisionId: null,
+        },
+      ],
+    }),
+  );
+  await mount(page, state);
+  const panel = await openExecution(page);
+  await expect(panel).toHaveCSS("width", "390px");
+  for (let index = 0; index < 8; index++) {
+    await page.keyboard.press("Tab");
+    expect(
+      await panel.evaluate((element) =>
+        element.contains(document.activeElement),
+      ),
+    ).toBe(true);
+  }
+  await expect(
+    panel.getByRole("button", { name: "Arquivar execução" }),
+  ).toBeEnabled();
+  await page.screenshot({
+    path: testInfo.outputPath("execution-panel-mobile.png"),
+    fullPage: true,
+  });
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Abrir execuções" }),
+  ).toBeFocused();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await openExecution(page);
+  await page.getByRole("button", { name: "Arquivar execução" }).click();
+  await expect(page.getByText("Nenhuma execução por aqui.")).toBeVisible();
+});
+
+test("fila lista execuções antigas com carregar mais e preserva revisão na página", async ({
+  page,
+}) => {
+  const state = emptyWorkspace();
+  const c = company(state, { name: "Empresa histórica" });
+  for (let index = 0; index < 18; index++) {
+    state.runs.push(
+      run(c, {
+        status: "failed",
+        items: [
+          {
+            companyId: c.id,
+            status: "failed",
+            error: "Falha",
+            revisionId: null,
+          },
+        ],
+      }),
+    );
+  }
+  const archived = run(c, {
+    status: "completed",
+    archivedAt: new Date().toISOString(),
+    archivedBy: actor,
+  });
+  state.runs.push(archived);
+  state.revisions.push(revision(c, { runId: archived.id, status: "approved" }));
+  await mount(page, state);
+  await page.getByRole("button", { name: "Abrir execuções" }).click();
+  const panel = page.getByRole("dialog");
+  await expect(
+    panel.getByRole("button", { name: /Analisar sinais/ }),
+  ).toHaveCount(15);
+  await panel.getByRole("button", { name: "Carregar mais execuções" }).click();
+  await expect(
+    panel.getByRole("button", { name: /Analisar sinais/ }),
+  ).toHaveCount(18);
+  await expect(panel.getByText("Arquivada", { exact: true })).toHaveCount(0);
+  await panel.getByRole("button", { name: "Fechar execuções" }).click();
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "Revisões", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Aprovadas", exact: true }).click();
+  await page
+    .getByRole("button", { name: /Empresa histórica.*alterações propostas/ })
+    .click();
+  await expect(
+    page.getByRole("dialog").getByText("Aprovada", { exact: true }),
+  ).toBeVisible();
 });

@@ -191,6 +191,15 @@ export type Revision = {
   reason: string;
   edited: boolean;
 };
+export type AgentPhase = "preparing" | "generating" | "validating" | "saving";
+export type AgentStep = {
+  phase: AgentPhase;
+  attempt: number;
+  startedAt: string;
+  finishedAt?: string;
+  status: "running" | "completed" | "failed";
+  error?: string;
+};
 export type AgentRun = {
   id: string;
   archivedAt?: string;
@@ -206,6 +215,7 @@ export type AgentRun = {
   workflowId: string | null;
   startedAt?: string;
   finishedAt?: string;
+  error?: string;
   status: "queued" | "running" | "completed" | "failed";
   items: {
     companyId: string;
@@ -218,6 +228,7 @@ export type AgentRun = {
     startedAt?: string;
     finishedAt?: string;
     attempts?: number;
+    steps?: AgentStep[];
   }[];
 };
 export type Audit = {

@@ -16,6 +16,7 @@ import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/fields";
 import { api } from "./forms";
+import { RunList } from "./execution-panel";
 import { companyWarnings } from "@/lib/domain/company-warnings";
 export function RecordDetail({
   record,
@@ -27,6 +28,8 @@ export function RecordDetail({
   onAgent,
   onReview,
   onAddCommercial,
+  onOpenRun,
+  initialTab = "Dados",
 }: {
   record: DataRecord;
   state: Workspace;
@@ -37,8 +40,10 @@ export function RecordDetail({
   onAgent: (agent: "signals" | "outreach", companyIds: string[]) => void;
   onReview: (id: string) => void;
   onAddCommercial: () => void;
+  onOpenRun: (id: string) => void;
+  initialTab?: string;
 }) {
-  const [tab, setTab] = useState("Dados");
+  const [tab, setTab] = useState(initialTab);
   const [history, setHistory] = useState<
     {
       id: number;
@@ -64,6 +69,7 @@ export function RecordDetail({
         "Oportunidades",
         "Mensagens",
         "Revisões",
+        "Execuções",
         "Histórico",
       ]
     : ["Dados", "Origem"];
@@ -464,6 +470,15 @@ export function RecordDetail({
             </p>
           )}
         </div>
+      )}
+      {tab === "Execuções" && company && (
+        <RunList
+          state={state}
+          runs={state.runs.filter((run) =>
+            run.items.some((item) => item.companyId === record.id),
+          )}
+          onOpen={(run) => onOpenRun(run.id)}
+        />
       )}
       {tab === "Origem" && <Origins record={record} />}
     </Dialog>

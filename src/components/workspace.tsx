@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Building2,
   Users,
@@ -39,6 +39,7 @@ import {
   type DataRecord,
   type RuleSet,
   type SavedList,
+  type AgentRun,
 } from "@/lib/domain/types";
 import type { UserCommand } from "@/lib/domain/commands";
 import {
@@ -56,6 +57,11 @@ import { RecordTable } from "./data-table";
 import { RecordForm, ImportDialog, ListForm, api } from "./forms";
 import { RulesEditor } from "./rules-editor";
 import { AgentDialog, ReviewDialog } from "./agents-and-reviews";
+import {
+  ExecutionPanel,
+  RunList,
+  type ExecutionTarget,
+} from "./execution-panel";
 import { RecordDetail } from "./record-detail";
 const NAV = [
   { name: "Empresas", icon: Building2, dataset: "Prospects" },
@@ -110,6 +116,10 @@ export function WorkspaceApp({
     id?: string;
   } | null>(null);
   const [importing, setImporting] = useState<Dataset | null>(null);
+  const [executionTarget, setExecutionTarget] =
+    useState<ExecutionTarget | null>(null);
+  const executionTrigger = useRef<HTMLButtonElement>(null);
+  const [detailTab, setDetailTab] = useState("Dados");
   const [detailId, setDetailId] = useState<string | null>(null);
   const [rulesKind, setRulesKind] = useState<RuleSet["kind"] | null>(null);
   const [listForm, setListForm] = useState<{ list?: SavedList } | null>(null);
@@ -119,16 +129,21 @@ export function WorkspaceApp({
   } | null>(null);
   const [reviewId, setReviewId] = useState<string | null>(null);
   const [setup, setSetup] = useState(false);
+  const refreshing = useRef(false);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const refresh = useCallback(async () => {
-    if (!connected) return;
+    if (!connected || refreshing.current) return;
+    refreshing.current = true;
     try {
       const r = await api("/api/workspace");
       setState(r.state);
       setAiReady(r.aiReady);
+      setLastUpdated(new Date().toLocaleTimeString("pt-BR"));
       setError("");
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      refreshing.current = false;
       setLoading(false);
     }
   }, [connected]);
@@ -164,12 +179,33 @@ export function WorkspaceApp({
     const result = await api("/api/commands", command);
     setState(result.state);
     setNotice(
-      command.type === "review"
-        ? "Revisão registrada."
-        : command.type === "rules"
-          ? "Configuração salva e notas atualizadas."
-          : "Alterações salvas.",
+      command.type === "archiveRun"
+        ? "Execução arquivada para a equipe."
+        : command.type === "review"
+          ? "Revisão registrada."
+          : command.type === "rules"
+            ? "Configuração salva e notas atualizadas."
+            : "Alterações salvas.",
     );
+  };
+  const resumeRun = async (run: AgentRun) => {
+    try {
+      const result = await api("/api/agents", {
+        id: run.id,
+        agent: run.agent,
+        companyIds: run.companyIds,
+        productId: run.productId,
+        contactId: run.contactId,
+        channel: run.channel,
+      });
+      setState(result.state);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const openRecord = (id: string) => {
+    setDetailTab("Dados");
+    setDetailId(id);
   };
   const go = (p: string) => {
     setPage(p);
@@ -228,7 +264,7 @@ export function WorkspaceApp({
       dataset={d}
       records={rows}
       state={state}
-      onOpen={(r) => setDetailId(r.id)}
+      onOpen={(r) => openRecord(r.id)}
       onNew={() => add(d)}
       onImport={() => importCsv(d)}
       selected={selected}
@@ -286,7 +322,7 @@ export function WorkspaceApp({
     />
   );
   return (
-    <div className="flex h-dvh overflow-hidden">
+    <div className="flex h-dvh overflow-clip">
       {mobile && (
         <button
           aria-label="Fechar menu"
@@ -408,12 +444,50 @@ export function WorkspaceApp({
             >
               <Menu size={18} />
             </button>
-            <span>Espaço de trabalho</span>
-            <ChevronRight size={12} />
-            <span className="text-neutral-600">{page}</span>
+            <span
+              className={cn(
+                "hidden items-center gap-2 sm:flex",
+                executionTarget && "lg:hidden 2xl:flex",
+              )}
+            >
+              <span>Espaço de trabalho</span>
+              <ChevronRight size={12} />
+              <span className="text-neutral-600">{page}</span>
+            </span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="hidden items-center gap-1.5 sm:flex">
+            <Button
+              ref={executionTrigger}
+              variant="ghost"
+              size="sm"
+              aria-label="Abrir execuções"
+              aria-expanded={!!executionTarget}
+              onClick={() =>
+                setExecutionTarget(executionTarget ? null : { runId: null })
+              }
+            >
+              <Clock3 />
+              Execuções
+              <span
+                className="text-[10px]"
+                title="Execuções em andamento / revisões pendentes"
+              >
+                {
+                  state.runs.filter(
+                    (r) => r.status === "queued" || r.status === "running",
+                  ).length
+                }{" "}
+                <span className="hidden xl:inline">em andamento</span> ·{" "}
+                {pendingReviews}{" "}
+                <span className="hidden xl:inline">pendentes</span>
+              </span>
+            </Button>
+            <span
+              className={cn(
+                "hidden items-center gap-1.5 sm:flex",
+                executionTarget && "lg:hidden 2xl:flex",
+              )}
+            >
               <span
                 className={cn(
                   "size-1.5 rounded-full",
@@ -586,6 +660,12 @@ export function WorkspaceApp({
         {error && (
           <div className="mx-6">
             <ErrorNote message={error} />
+            {lastUpdated && (
+              <p className="mb-2 text-xs text-neutral-500">
+                Mantivemos os últimos dados recebidos, às {lastUpdated}. Uma
+                falha de atualização não significa que o agente parou.
+              </p>
+            )}
             <button
               onClick={() => void refresh()}
               className="mb-3 text-xs underline"
@@ -669,7 +749,7 @@ export function WorkspaceApp({
                             className="mb-3 rounded-lg border border-neutral-200 bg-white p-4 shadow-[0_2px_4px_#00000003]"
                           >
                             <button
-                              onClick={() => setDetailId(r.id)}
+                              onClick={() => openRecord(r.id)}
                               className="w-full text-left"
                             >
                               <p className="mb-2 text-[10px] text-neutral-400">
@@ -911,7 +991,7 @@ export function WorkspaceApp({
                       )
                       .map((r) => (
                         <button
-                          onClick={() => setDetailId(r.id)}
+                          onClick={() => openRecord(r.id)}
                           className="rounded border border-neutral-200 px-3 py-2 text-xs hover:bg-neutral-50"
                           key={r.id}
                         >
@@ -1023,104 +1103,16 @@ export function WorkspaceApp({
                     </div>
                   ))}
                 </div>
-                {state.runs.length > 0 && (
-                  <details
-                    open={pendingRun}
-                    className="mb-5 rounded-lg border border-neutral-200 bg-white p-4"
-                  >
-                    <summary className="cursor-pointer text-xs font-medium">
-                      Execuções dos agentes · {state.runs.length}
-                    </summary>
-                    {state.runs
-                      .slice()
-                      .reverse()
-                      .slice(0, 15)
-                      .map((run) => (
-                        <div
-                          key={run.id}
-                          className="mt-3 border-t border-neutral-100 pt-3 text-xs"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span>
-                              {run.agent === "signals"
-                                ? "Analisar sinais"
-                                : "Preparar abordagem"}{" "}
-                              · {dateBR(run.requestedAt)}
-                            </span>
-                            <Badge
-                              tone={
-                                run.status === "failed"
-                                  ? "red"
-                                  : run.status === "completed"
-                                    ? "green"
-                                    : "orange"
-                              }
-                            >
-                              {
-                                {
-                                  queued: "Na fila",
-                                  running: "Em execução",
-                                  completed: "Concluída",
-                                  failed: "Falhou",
-                                }[run.status]
-                              }
-                            </Badge>
-                          </div>
-                          <p className="mt-2 text-neutral-400">
-                            {
-                              run.items.filter((i) => i.status === "completed")
-                                .length
-                            }{" "}
-                            de {run.items.length} empresas concluídas ·{" "}
-                            {
-                              run.items.filter((i) => i.status === "failed")
-                                .length
-                            }{" "}
-                            falhas
-                          </p>
-                          {run.items
-                            .filter((i) => i.error)
-                            .map((i) => (
-                              <p
-                                key={i.companyId}
-                                className="mt-1 text-red-600"
-                              >
-                                {display(
-                                  state.records.find(
-                                    (r) => r.id === i.companyId,
-                                  )?.data.name,
-                                )}
-                                : {i.error}
-                              </p>
-                            ))}
-                          {run.status === "queued" && !run.workflowId && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="mt-2"
-                              onClick={async () => {
-                                try {
-                                  const result = await api("/api/agents", {
-                                    id: run.id,
-                                    agent: run.agent,
-                                    companyIds: run.companyIds,
-                                    productId: run.productId,
-                                    contactId: run.contactId,
-                                    channel: run.channel,
-                                  });
-                                  setState(result.state);
-                                } catch (e) {
-                                  setError((e as Error).message);
-                                }
-                              }}
-                            >
-                              Retomar execução
-                            </Button>
-                          )}
-                        </div>
-                      ))}
-                  </details>
-                )}
+                <section className="mb-5" aria-label="Execuções dos agentes">
+                  <h2 className="mb-3 text-sm font-medium">
+                    Execuções dos agentes
+                  </h2>
+                  <RunList
+                    state={state}
+                    runs={state.runs.filter((r) => !r.archivedAt)}
+                    onOpen={(run) => setExecutionTarget({ runId: run.id })}
+                  />
+                </section>
                 <div className="mb-4 flex gap-2">
                   {[
                     { value: "pending", label: "Pendentes" },
@@ -1227,6 +1219,22 @@ export function WorkspaceApp({
           </div>
         )}
       </main>
+      {executionTarget && (
+        <ExecutionPanel
+          state={state}
+          target={executionTarget}
+          onTarget={setExecutionTarget}
+          triggerRef={executionTrigger}
+          onClose={() => setExecutionTarget(null)}
+          onSave={save}
+          onResume={resumeRun}
+          onReturnCompany={(id) => {
+            setExecutionTarget(null);
+            setDetailTab("Execuções");
+            setDetailId(id);
+          }}
+        />
+      )}
       {notice && (
         <div
           role="status"
@@ -1263,13 +1271,22 @@ export function WorkspaceApp({
           key={detail.id}
           open
           record={detail}
+          initialTab={detailTab}
+          onOpenRun={(runId) => {
+            setDetailId(null);
+            setExecutionTarget({
+              runId,
+              companyId: detail.id,
+              returnCompanyId: detail.id,
+            });
+          }}
           state={state}
           onClose={() => setDetailId(null)}
           onEdit={(r) => {
             setDetailId(null);
             setRecordForm({ dataset: r.dataset, id: r.id });
           }}
-          onOpenRecord={(r) => setDetailId(r.id)}
+          onOpenRecord={(r) => openRecord(r.id)}
           onAgent={(a, ids) => {
             setDetailId(null);
             startAgent(a, ids);
@@ -1309,9 +1326,24 @@ export function WorkspaceApp({
           {...agent}
           state={state}
           onClose={() => setAgent(null)}
-          onStarted={(s) => {
+          onReview={(id) => {
+            setAgent(null);
+            const pending = state.revisions.find((r) => r.id === id);
+            setExecutionTarget({
+              runId: pending?.runId ?? null,
+              revisionId: id,
+              companyId: pending?.companyId,
+            });
+          }}
+          onStarted={(s, runId) => {
             setState(s);
-            go("Revisões");
+            setExecutionTarget({
+              runId,
+              companyId:
+                s.runs.find((r) => r.id === runId)?.items.length === 1
+                  ? s.runs.find((r) => r.id === runId)?.items[0].companyId
+                  : undefined,
+            });
             setNotice(
               "Execução iniciada. Você pode acompanhar o progresso aqui.",
             );
