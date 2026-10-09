@@ -18,14 +18,30 @@ beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "test");
   state = emptyWorkspace();
   beforeCommit = undefined;
-  mock.rpc.mockImplementation(async (operation, args) => {
+  mock.rpc.mockImplementation((operation, args) => {
     if (operation === "read_workspace")
-      return { data: structuredClone(state), error: null };
+      return {
+        abortSignal: async () => ({
+          data: structuredClone(state),
+          error: null,
+        }),
+      };
     if (beforeCommit?.())
-      return { error: { code: "40001", message: "WORKSPACE_CONFLICT" } };
-    state = structuredClone(args.document);
+      return {
+        abortSignal: async () => ({
+          error: { code: "40001", message: "WORKSPACE_CONFLICT" },
+        }),
+      };
+    for (const [collection, entries] of Object.entries(args.patch)) {
+      const target = state[collection as keyof Workspace] as { id: string }[];
+      for (const entry of entries as { id: string }[]) {
+        const index = target.findIndex((e) => e.id === entry.id);
+        if (index < 0) target.push(structuredClone(entry));
+        else target[index] = structuredClone(entry);
+      }
+    }
     state.version++;
-    return { data: state.version, error: null };
+    return { abortSignal: async () => ({ data: state.version, error: null }) };
   });
 });
 afterEach(() => vi.unstubAllEnvs());

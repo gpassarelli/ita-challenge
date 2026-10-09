@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
+import { ServiceError } from "./diagnostics";
 
 class OriginError extends Error {
   constructor() {
@@ -35,6 +36,11 @@ export function assertSameOrigin(request: Request) {
   throw new OriginError();
 }
 export function errorResponse(error: unknown) {
+  if (error instanceof ServiceError)
+    return NextResponse.json(
+      { error: error.message },
+      { status: error.retryable ? 503 : 500 },
+    );
   if (error instanceof OriginError)
     return NextResponse.json({ error: error.message }, { status: 403 });
   if (error instanceof ZodError)

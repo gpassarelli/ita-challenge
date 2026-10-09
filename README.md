@@ -37,6 +37,8 @@ As migrações criam somente a estrutura e um controle técnico de versão vazio
 
 Em uma base já instalada que ainda não recebeu a atualização, aplique somente a [migração de contratações e portfólio](supabase/migrations/202610040001_contracts_portfolio.sql). Ela acrescenta campos às projeções SQL, sem modificar registros existentes. O aplicativo usa os registros canônicos, sem depender dos novos campos das views.
 
+Antes de executar esta versão, aplique [202610090001_workspace_patch.sql](supabase/migrations/202610090001_workspace_patch.sql). A migração adiciona gravações parciais e leitura de uma execução; mantém a transação, as validações e as permissões existentes. Não há fallback para gravação integral: uma migração ausente produz um diagnóstico de configuração. Novas instalações já incluem essa atualização em `supabase/setup.sql`.
+
 Todos os usuários autenticados participam do mesmo workspace, com regras e listas compartilhadas. As tabelas têm RLS: usuários leem os registros; as gravações passam pelo servidor autenticado e pela função transacional. Não há controle de permissões por cargo neste MVP.
 
 ### Estado da conexão verificado em 04/10/2026
@@ -167,3 +169,10 @@ O armazenamento mantém registros canônicos com campos estruturados em JSONB, c
 Para o volume do hackathon, as operações leem um snapshot do workspace e gravam por comparação de versão em uma transação. Há quatro tentativas de conflito de concorrência, validação de versão por registro e recibos de idempotência. Não é uma arquitetura para bases grandes: paginação no servidor, gravações incrementais e fila por tenant são evoluções posteriores.
 
 A auditoria de dependências encontrou uma cadeia transitiva do adaptador Nest do pacote Workflow envolvendo `http-cache-semantics` (GHSA-ch52-4w7c-c8xp), sem correção publicada na versão consultada. O aplicativo usa o adaptador Next.js; essa cadeia não participa das rotas implementadas. Correções compatíveis de `devalue` e `nanoid` estão fixadas por overrides. Reavalie `npm audit` antes da publicação; a entrega não declara ausência de vulnerabilidades.
+
+
+### Workspace conflict retry storms
+
+Apply `supabase/migrations/202610090002_workspace_conflict.sql` after the sparse-write migration. Business version conflicts now return `PT409` (HTTP 409), rather than `40001`, which PostgREST can retry indefinitely using the same stale version. The application re-reads current data between at most four attempts with backoff/jitter. Progress-only saves skip scoring recalculation when evaluations are current and skip record relationship scans. Permissions, atomic version checks, relationship checks on record writes, and score history remain in effect.
+
+Database telemetry includes operation, duration, attempt, code and run ID when available, serialized as JSON so development logs retain the timings. A `TIMEOUT` alone does not distinguish database contention from network latency; compare read/save durations and conflict counts before changing database capacity.

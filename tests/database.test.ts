@@ -31,6 +31,7 @@ beforeAll(async () => {
     "202610030001_workspace.sql",
     "202610030002_typed_views.sql",
     "202610040001_contracts_portfolio.sql",
+    "202610090001_workspace_patch.sql",
   ])
     await db.exec(readFileSync("supabase/migrations/" + file, "utf8"));
 }, 30000);
