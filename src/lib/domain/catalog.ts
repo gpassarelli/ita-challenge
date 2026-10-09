@@ -32,6 +32,35 @@ const f = (
 ): Field => ({ key, label, type, ...extra });
 const yesNo = ["Sim", "Não"];
 const levels = ["Baixo", "Médio", "Alto"];
+export const BRAZILIAN_STATES = [
+  "AC",
+  "AL",
+  "AP",
+  "AM",
+  "BA",
+  "CE",
+  "DF",
+  "ES",
+  "GO",
+  "MA",
+  "MT",
+  "MS",
+  "MG",
+  "PA",
+  "PB",
+  "PR",
+  "PE",
+  "PI",
+  "RJ",
+  "RN",
+  "RS",
+  "RO",
+  "RR",
+  "SC",
+  "SP",
+  "SE",
+  "TO",
+] as const;
 const company = [
   f("company_external_id", "ID Empresa", "text", { required: true }),
   f("company_name", "Empresa"),
@@ -289,35 +318,7 @@ export function parseCell(value: unknown, field: Field): Cell {
     throw new Error(field.label + ": opção inválida (" + text + ").");
   if (
     field.key === "state" &&
-    ![
-      "AC",
-      "AL",
-      "AP",
-      "AM",
-      "BA",
-      "CE",
-      "DF",
-      "ES",
-      "GO",
-      "MA",
-      "MT",
-      "MS",
-      "MG",
-      "PA",
-      "PB",
-      "PR",
-      "PE",
-      "PI",
-      "RJ",
-      "RN",
-      "RS",
-      "RO",
-      "RR",
-      "SC",
-      "SP",
-      "SE",
-      "TO",
-    ].includes(text.toUpperCase())
+    !BRAZILIAN_STATES.some((state) => state === text.toUpperCase())
   )
     throw new Error("UF inválida.");
   return field.key === "state" ? text.toUpperCase() : text;

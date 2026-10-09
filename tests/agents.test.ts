@@ -47,7 +47,7 @@ const common =
 const prompts = {
   signals:
     common +
-    'Você trabalha com dados fictícios de demonstração, não com dados reais. Leia os sinais junto às demais informações da empresa e proponha atualizações nos campos permitidos quando houver uma interpretação plausível, mesmo que o sinal seja breve ou tenha poucos detalhes. Não exija evidência detalhada, confirmação externa ou comprovação definitiva para propor uma atualização. Use os fatos fornecidos como base para inferências razoáveis; identifique cada inferência na justificativa, sem apresentá-la como fato confirmado. Por exemplo, uma vaga em RH pode sustentar uma proposta de RH estruturado, identificada como inferência a partir desse sinal. Não invente contatos, datas, números ou condições contratuais ausentes; revisão de benefícios não informa uma data de renovação nem um contrato de 24 meses. Cite os IDs reais dos registros usados em cada proposta e escreva explicações, justificativas e avisos exclusivamente em português brasileiro. Seja conciso: em changes, inclua somente campos com alteração proposta e escreva em reason uma justificativa curta que conecte a evidência à mudança, incluindo qualquer ressalva relevante. Agrupe a argumentação por alteração, sem repetir a lista de propostas em explanation nem comentar campos inalterados ou lacunas sem relação com as mudanças. Use explanation apenas para um resumo curto, de uma frase, da quantidade de alterações propostas; se não houver alterações, escreva "Nenhuma alteração proposta.". Coloque os IDs dos registros apenas em evidenceIds, sem repeti-los em explanation, reason ou warnings. Não repita nos textos os valores já apresentados em before e after pela interface. Para esta revisão de dados, mantenha warnings vazio e inclua eventuais ressalvas na justificativa da alteração correspondente. As mudanças são propostas para aprovação humana. Não proponha alterações em campos já compatíveis nem force mudanças sem relação plausível com o contexto. Ausência de sinal não é evidência negativa.',
+    'Você trabalha com dados fictícios de demonstração, não com dados reais. Leia os sinais junto às demais informações da empresa e proponha atualizações nos campos permitidos quando houver uma interpretação plausível, mesmo que o sinal seja breve ou tenha poucos detalhes. Não exija evidência detalhada, confirmação externa ou comprovação definitiva para propor uma atualização. Use os fatos fornecidos como base para inferências razoáveis; identifique cada inferência na justificativa, sem apresentá-la como fato confirmado. Por exemplo, uma vaga em RH pode sustentar uma proposta de RH estruturado, identificada como inferência a partir desse sinal. Não invente contatos, datas, números ou condições contratuais ausentes; revisão de benefícios não informa uma data de renovação nem um contrato de 24 meses. Cite os IDs reais dos registros usados em cada proposta e escreva explicações, justificativas e avisos exclusivamente em português brasileiro. Seja conciso: em changes, inclua somente campos com alteração proposta e escreva em reason uma justificativa curta que conecte a evidência à mudança, incluindo qualquer ressalva relevante. Agrupe a argumentação por alteração, sem repetir a lista de propostas em explanation nem comentar campos inalterados ou lacunas sem relação com as mudanças. Use explanation apenas para um resumo curto, de uma frase, da quantidade de alterações propostas; se não houver alterações, escreva "Nenhuma alteração proposta.". Coloque os IDs dos registros apenas em evidenceIds, sem repeti-los em explanation, reason ou warnings. Não repita nos textos os valores já apresentados em before e after pela interface. Para esta revisão de dados, mantenha warnings vazio e inclua eventuais ressalvas na justificativa da alteração correspondente. As mudanças são propostas para aprovação humana. Não proponha alterações em campos já compatíveis nem force mudanças sem relação plausível com o contexto. Ausência de sinal não é evidência negativa. Siga o esquema de saída fornecido: cada field permite somente os valores definidos para seu after. Use exatamente as opções enumeradas, UF em sigla maiúscula, colaboradores como número inteiro não negativo e null para ausência de valor; não use sinônimos, números formatados nem textos explicativos em after.',
   outreach:
     common +
     "Prepare uma mensagem curta e personalizada para o produto selecionado e o canal indicado. Conecte o problema do prospect à proposta de valor fornecida. Não prometa resultados ou preços não informados. Não afirme publicamente informações internas de clientes ou oportunidades. Sem pessoa nominal identificada, dirija-se à equipe da empresa. Inclua uma chamada para conversa. O assunto deve ficar vazio quando o canal não for e-mail.",
@@ -129,6 +129,14 @@ it.each(["signals", "outreach"] as const)(
         abortSignal: expect.any(AbortSignal),
       }),
     );
+    if (kind === "signals") {
+      const options = mocks.generateText.mock.calls[0][0];
+      expect(options.providerOptions).toEqual({
+        openai: { strictJsonSchema: true },
+      });
+      const format = await options.output.responseFormat;
+      expect(format.schema.properties.changes.items.anyOf).toHaveLength(13);
+    }
     expect(state.revisions).toHaveLength(1);
     expect(
       execution.items[0].steps?.map((step) => [step.phase, step.status]),
@@ -141,7 +149,7 @@ it.each(["signals", "outreach"] as const)(
     const revision = state.revisions[0];
     expect(revision).toMatchObject({
       model: `test-${kind}-model`,
-      promptVersion: kind === "signals" ? "signals-v3" : "outreach-v1",
+      promptVersion: kind === "signals" ? "signals-v4" : "outreach-v1",
       status: "pending",
       input: context.input,
     });
@@ -210,7 +218,7 @@ it("valida categorias e campos repetidos nas propostas de sinais", async () => {
   const prepared = (await prepareCompany(execution.id, prospect.id))!;
   await beginGeneration(prepared, 1);
   signal.changes[0].after = "categoria inventada";
-  expect((await generateCompany(prepared)).error).toContain("AI_FIELD");
+  expect((await generateCompany(prepared)).error).toContain("AI_OUTPUT");
   signal.changes[0].after = "Sim";
   signal.changes.push({ ...signal.changes[0] });
   expect((await generateCompany(prepared)).error).toContain("AI_EVIDENCE");

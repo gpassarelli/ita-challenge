@@ -19,8 +19,9 @@ Coloque os IDs dos registros apenas em evidenceIds, sem repeti-los em explanatio
 Para esta revisão de dados, mantenha warnings vazio e inclua eventuais ressalvas na justificativa da alteração correspondente.
 As mudanças são propostas para aprovação humana. Não proponha alterações em campos já compatíveis nem force mudanças sem relação plausível com o contexto.
 Ausência de sinal não é evidência negativa.
+Siga o esquema de saída fornecido: cada field permite somente os valores definidos para seu after. Use exatamente as opções enumeradas, UF em sigla maiúscula, colaboradores como número inteiro não negativo e null para ausência de valor; não use sinônimos, números formatados nem textos explicativos em after.
 `;
-export const SIGNALS_PROMPT_VERSION = "signals-v3";
+export const SIGNALS_PROMPT_VERSION = "signals-v4";
 export const SIGNALS_MODEL_ENV = "AI_SIGNALS_MODEL";
 
 export async function executeSignals(
@@ -33,7 +34,8 @@ export async function executeSignals(
     model: openai(model),
     system: composePrompt(SIGNALS_PROMPT),
     prompt: JSON.stringify(context.input),
-    output: Output.object({ schema: signalOutputSchema }),
+    output: Output.object({ schema: signalOutputSchema, name: "company_signal_review" }),
+    providerOptions: { openai: { strictJsonSchema: true } },
     maxOutputTokens: 4000,
     maxRetries: 0,
     timeout: 60000,

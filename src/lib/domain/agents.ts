@@ -1,19 +1,52 @@
 import { contactKind, normalizedValue } from "./values";
 import { z } from "zod";
 import { ALLOWED_AI_FIELDS } from "./mutations";
-import { fieldsFor, parseCell } from "./catalog";
+import { BRAZILIAN_STATES, fieldsFor, parseCell } from "./catalog";
 import type { AgentRun, Change, DataRecord, Workspace } from "./types";
-export const signalOutputSchema = z.object({
+
+function signalChangeSchema(key: (typeof ALLOWED_AI_FIELDS)[number]) {
+  const field = fieldsFor("Prospects").find((field) => field.key === key);
+  if (!field || field.readOnly)
+    throw new Error(`Campo de IA sem definição editável: ${key}.`);
+  let value: z.ZodType<string | number>;
+  if (key === "state") {
+    value = z.enum(BRAZILIAN_STATES);
+  } else if (field.choices) {
+    value = z.enum(field.choices);
+  } else if (field.type === "integer" || field.type === "number") {
+    let number = field.type === "integer" ? z.number().int() : z.number();
+    if (field.min !== undefined) number = number.min(field.min);
+    if (field.max !== undefined) number = number.max(field.max);
+    value = number;
+  } else {
+    value = z.string().min(1).max(12000);
+  }
+  return z.strictObject({
+    field: z.literal(key),
+    after: value
+      .nullable()
+      .describe(
+        `${field.label}: valor proposto; use null para ausência de valor.`,
+      ),
+    reason: z.string().min(1).max(2000),
+    evidenceIds: z.array(z.string()).min(1).max(30),
+  });
+}
+
+// Nested anyOf binds each field to its own value constraints in the schema
+// sent to the provider, while keeping an object at the schema root.
+const signalChangeSchemas = ALLOWED_AI_FIELDS.map(signalChangeSchema);
+export const signalOutputSchema = z.strictObject({
   explanation: z.string().min(1).max(4000),
   warnings: z.array(z.string().max(1000)).max(20),
   changes: z
     .array(
-      z.object({
-        field: z.enum(ALLOWED_AI_FIELDS),
-        after: z.string().nullable(),
-        reason: z.string().min(1).max(2000),
-        evidenceIds: z.array(z.string()).min(1).max(30),
-      }),
+      z.union(
+        signalChangeSchemas as [
+          ReturnType<typeof signalChangeSchema>,
+          ...ReturnType<typeof signalChangeSchema>[],
+        ],
+      ),
     )
     .max(ALLOWED_AI_FIELDS.length),
 });
