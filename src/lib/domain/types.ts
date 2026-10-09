@@ -203,6 +203,7 @@ export type AgentStep = {
 export type AgentRun = {
   settings?: AgentExecutionSettings;
   rateLimitUntil?: string;
+  retryOf?: string;
   id: string;
   archivedAt?: string;
   archivedBy?: string;

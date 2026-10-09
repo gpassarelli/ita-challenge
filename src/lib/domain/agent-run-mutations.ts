@@ -3,7 +3,12 @@ import type { agentRequestSchema } from "./commands";
 import { agentContext } from "./agents";
 import { audit } from "./mutations";
 import { agentEligibility, archiveBlockReason } from "./agent-runs";
-import { isoNow, type AgentRun, type Workspace, type AgentExecutionSettings } from "./types";
+import {
+  isoNow,
+  type AgentRun,
+  type Workspace,
+  type AgentExecutionSettings,
+} from "./types";
 
 // Called inside mutateWorkspace so conflicts recompute eligibility from fresh data.
 export function queueAgentRun(
@@ -18,6 +23,32 @@ export function queueAgentRun(
     throw new Error(
       "Aguarde a execução atual terminar antes de iniciar outra.",
     );
+  if (input.retryOf) {
+    const previous = state.runs.find((run) => run.id === input.retryOf);
+    if (
+      !previous ||
+      previous.status === "queued" ||
+      previous.status === "running"
+    )
+      throw new Error(
+        "A execução anterior precisa terminar antes de repetir as falhas.",
+      );
+    const failed = new Set(
+      previous.items
+        .filter((item) => item.status === "failed")
+        .map((item) => item.companyId),
+    );
+    if (
+      input.companyIds.some((id) => !failed.has(id)) ||
+      input.agent !== previous.agent ||
+      input.productId !== previous.productId ||
+      input.contactId !== previous.contactId ||
+      input.channel !== previous.channel
+    )
+      throw new Error(
+        "A nova execução deve repetir somente as empresas com falha, com a mesma configuração.",
+      );
+  }
   const selection = [...new Set(input.companyIds)];
   if (input.contactId && selection.length !== 1)
     throw new Error(

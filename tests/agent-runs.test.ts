@@ -202,3 +202,60 @@ it("reconcilia workflow encerrado sem retomar IA e preserva o erro original", ()
     state.audits.filter((a) => a.action === "Execução reconciliada"),
   ).toHaveLength(1);
 });
+
+it("repete somente falhas e preserva a execução e revisão bem-sucedidas", () => {
+  const state = emptyWorkspace();
+  const first = company(state),
+    second = company(state),
+    blocked = company(state);
+  const original = run(first, {
+    status: "completed",
+    companyIds: [first.id, second.id, blocked.id],
+    items: [
+      {
+        companyId: first.id,
+        status: "completed",
+        error: null,
+        revisionId: null,
+      },
+      {
+        companyId: second.id,
+        status: "failed",
+        error: "AI_FIELD",
+        revisionId: null,
+      },
+      {
+        companyId: blocked.id,
+        status: "failed",
+        error: "AI_TIMEOUT",
+        revisionId: null,
+      },
+    ],
+  });
+  state.runs.push(original);
+  state.revisions.push(revision(first), revision(blocked));
+  const snapshot = structuredClone(original);
+  expect(() =>
+    queueAgentRun(state, actor, {
+      ...request([first.id]),
+      retryOf: original.id,
+    }),
+  ).toThrow("somente");
+  expect(() =>
+    queueAgentRun(state, actor, {
+      ...request([second.id]),
+      retryOf: original.id,
+      channel: "LinkedIn",
+    }),
+  ).toThrow("mesma configuração");
+  queueAgentRun(
+    state,
+    actor,
+    { ...request([second.id, blocked.id]), retryOf: original.id },
+    { concurrency: 8, timeoutMs: 60000 },
+  );
+  expect(state.runs[1].companyIds).toEqual([second.id]);
+  expect(state.runs[1].retryOf).toBe(original.id);
+  expect(original).toEqual(snapshot);
+  expect(state.revisions).toHaveLength(2);
+});

@@ -48,6 +48,7 @@ import {
   productName,
 } from "@/lib/domain/contracts";
 import { isMissing } from "@/lib/domain/values";
+import { agentEligibility } from "@/lib/domain/agent-runs";
 import { selectList } from "@/lib/domain/lists";
 import { cn, display, dateBR, brMoney } from "@/lib/utils";
 import { Button } from "./ui/button";
@@ -209,6 +210,31 @@ export function WorkspaceApp({
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+  const retryIds = useRef<Record<string, string>>({});
+  const retryRun = async (run: AgentRun) => {
+    const failed = run.items
+      .filter((item) => item.status === "failed")
+      .map((item) => item.companyId);
+    const { companyIds } = agentEligibility(state, run.agent, failed);
+    if (!companyIds.length)
+      throw new Error(
+        "Não há empresas com falha aptas para uma nova execução.",
+      );
+    const id = (retryIds.current[run.id] ??= crypto.randomUUID());
+    const result = await api("/api/agents", {
+      id,
+      retryOf: run.id,
+      agent: run.agent,
+      companyIds,
+      productId: run.productId,
+      contactId: run.contactId,
+      channel: run.channel,
+    });
+    delete retryIds.current[run.id];
+    setState(result.state);
+    setExecutionTarget({ runId: result.runId });
+    setNotice("Nova execução iniciada somente para as empresas com falha.");
   };
   const openRecord = (id: string) => {
     setDetailTab("Dados");
@@ -1236,6 +1262,7 @@ export function WorkspaceApp({
           onSave={save}
           onResume={resumeRun}
           onCancel={cancelRun}
+          onRetry={pendingRun ? undefined : retryRun}
           onReturnCompany={(id) => {
             setExecutionTarget(null);
             setDetailTab("Execuções");

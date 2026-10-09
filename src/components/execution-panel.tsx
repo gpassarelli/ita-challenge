@@ -106,6 +106,7 @@ export function ExecutionPanel({
   onSave,
   onResume,
   onCancel,
+  onRetry,
   onReturnCompany,
   triggerRef,
 }: {
@@ -116,6 +117,7 @@ export function ExecutionPanel({
   onSave: (command: UserCommand) => Promise<void>;
   onResume: (run: AgentRun) => Promise<void>;
   onCancel: (run: AgentRun) => Promise<void>;
+  onRetry?: (run: AgentRun) => Promise<void>;
   onReturnCompany: (id: string) => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
 }) {
@@ -277,6 +279,7 @@ export function ExecutionPanel({
                     onReview={review}
                     onResume={onResume}
                     onCancel={onCancel}
+                    onRetry={onRetry}
                   />
                   {!!run.skippedCompanies?.length && (
                     <div className="mb-4 rounded border border-amber-200 p-3 text-xs">

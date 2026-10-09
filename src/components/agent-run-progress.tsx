@@ -4,6 +4,7 @@ import type { AgentPhase, AgentRun, Workspace } from "@/lib/domain/types";
 import { dateBR, display } from "@/lib/utils";
 import { Badge, ErrorNote } from "./ui/fields";
 import { Button } from "./ui/button";
+import { agentEligibility } from "@/lib/domain/agent-runs";
 
 const phases: Record<AgentPhase, { label: string; detail: string }> = {
   preparing: {
@@ -13,7 +14,7 @@ const phases: Record<AgentPhase, { label: string; detail: string }> = {
   generating: {
     label: "Aguardando a IA",
     detail:
-      "Enviando o contexto e aguardando a resposta do modelo. Cada tentativa tem limite de 60 segundos; falhas temporárias permitem uma única nova tentativa.",
+      "Enviando o contexto e aguardando a resposta do modelo. Há no máximo duas tentativas; respostas inválidas recebem orientação para correção.",
   },
   validating: {
     label: "Validando resposta",
@@ -48,15 +49,18 @@ export function AgentRunProgress({
   onResume,
   onCancel,
   onReview,
+  onRetry,
   companyId,
 }: {
   state: Workspace;
   onResume: (run: AgentRun) => Promise<void>;
   onCancel: (run: AgentRun) => Promise<void>;
   onReview?: (id: string) => void;
+  onRetry?: (run: AgentRun) => Promise<void>;
   companyId?: string;
 }) {
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const active = state.runs.some(
@@ -92,6 +96,25 @@ export function AgentRunProgress({
             (i) => i.status === "cancelled",
           ).length;
           const finished = completed + failed;
+          const running = run.items.filter(
+            (item) => item.status === "running",
+          ).length;
+          const queued = run.items.filter(
+            (item) => item.status === "queued",
+          ).length;
+          const elapsedMinutes = Math.max(
+            1 / 60,
+            ((run.finishedAt ? Date.parse(run.finishedAt) : now) -
+              Date.parse(run.startedAt ?? run.requestedAt)) /
+              60000,
+          );
+          const retryCount = agentEligibility(
+            state,
+            run.agent,
+            run.items
+              .filter((item) => item.status === "failed")
+              .map((item) => item.companyId),
+          ).companyIds.length;
           const percent = run.items.length
             ? Math.round((100 * finished) / run.items.length)
             : 0;
@@ -145,6 +168,39 @@ export function AgentRunProgress({
                 </Button>
               )}
               <ErrorNote message={error} />
+              {onRetry &&
+                failed > 0 &&
+                run.status !== "queued" &&
+                run.status !== "running" && (
+                  <div className="mt-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={retrying !== null || retryCount === 0}
+                      onClick={async () => {
+                        setRetrying(run.id);
+                        setError("");
+                        try {
+                          await onRetry(run);
+                        } catch (e) {
+                          setError((e as Error).message);
+                        } finally {
+                          setRetrying(null);
+                        }
+                      }}
+                    >
+                      {retrying === run.id
+                        ? "Iniciando…"
+                        : `Repetir empresas com falha (${retryCount})`}
+                    </Button>
+                    {retryCount < failed && (
+                      <p className="mt-2 text-neutral-500">
+                        Empresas com revisões pendentes ficam fora da nova
+                        execução.
+                      </p>
+                    )}
+                  </div>
+                )}
               <div className="mt-3 flex flex-wrap justify-between gap-2 text-neutral-600">
                 <span>
                   {finished} de {run.items.length} empresas finalizadas ·{" "}
@@ -161,6 +217,13 @@ export function AgentRunProgress({
                 max={run.items.length || 1}
                 className="mt-2 h-2 w-full accent-emerald-600"
               />
+              <p className="mt-2 text-neutral-500">
+                {running} em processamento · {queued} na fila ·{" "}
+                {Math.round((finished / elapsedMinutes) * 10) / 10} empresas
+                finalizadas/min
+                {run.settings &&
+                  ` · até ${run.settings.concurrency} simultâneas`}
+              </p>
               {run.status === "running" && finished === run.items.length && (
                 <p className="mt-2 text-neutral-500">Finalizando o lote…</p>
               )}
@@ -204,8 +267,8 @@ export function AgentRunProgress({
                       )}
                       {item.status === "queued" && (
                         <p className="mt-2 text-neutral-500">
-                          Aguardando uma vaga no lote; até três empresas são
-                          processadas ao mesmo tempo.
+                          Aguardando uma vaga no lote · espera:{" "}
+                          {duration(run.requestedAt, item.finishedAt, now)}.
                         </p>
                       )}
                       {item.steps?.length ? (
@@ -238,6 +301,9 @@ export function AgentRunProgress({
                               </div>
                               <p className="mt-1 text-neutral-500">
                                 {phases[step.phase].detail}
+                                {step.phase === "generating" &&
+                                  run.settings &&
+                                  ` Limite por tentativa: ${run.settings.timeoutMs / 1000}s.`}
                               </p>
                               {step.error && (
                                 <p className="mt-1 text-red-700">
@@ -263,7 +329,9 @@ export function AgentRunProgress({
                         <p className="mt-1 text-neutral-500">
                           Início:{" "}
                           {new Date(item.startedAt).toLocaleString("pt-BR")} ·
-                          Tempo:{" "}
+                          Espera na fila:{" "}
+                          {duration(run.requestedAt, item.startedAt, now)} ·
+                          Processamento:{" "}
                           {duration(item.startedAt, item.finishedAt, now)}
                         </p>
                       )}

@@ -134,7 +134,7 @@ Cada agente tem seu prompt em destaque no início do arquivo, seguido da versão
 
 A extração preserva os prompts `signals-v1` e `outreach-v1`. Ao mudar as instruções, atualize a versão correspondente para manter a rastreabilidade. `src/lib/server/agent-steps.ts` mantém as etapas de execução, tentativas, auditoria e persistência. Saídas são validadas no servidor. Campos não autorizados, categorias inválidas e evidências fora do contexto são rejeitados. Conteúdo de CSV e sinais é tratado como dados, nunca como instruções.
 
-Vercel Workflow executa lotes de até três empresas em paralelo. Apenas um lote fica ativo por workspace. A etapa de inferência tem uma repetição, além de uma repetição interna do provedor; as chamadas têm timeout de 60 segundos e limite de saída. Entradas, modelo, prompt, tentativas, horários, resultado e decisão ficam registrados. Não há treinamento automático.
+Vercel Workflow mantém oito empresas em processamento por padrão, reabastecendo cada vaga assim que uma empresa termina. `AGENT_CONCURRENCY` aceita 1–16; `AI_ATTEMPT_TIMEOUT_MS` define o limite total por tentativa (60 segundos por padrão). Apenas um lote fica ativo por workspace. Há no máximo duas chamadas de IA por empresa, sem retries internos do provedor. Entradas, modelo, prompt, tentativas, horários, resultado e decisão ficam registrados. Não há treinamento automático.
 
 ### Progresso e diagnóstico
 
@@ -168,7 +168,7 @@ npm run build
 
 - Testes de domínio: cobertura das abas, tipos, importações, duplicidades, relações, duas notas, cobertura, recência, penalidades, listas, revisões, oportunidades ganhas, valores em reais e idempotência.
 - Testes Postgres com PGlite: migrações reais, base vazia, projeções, transação, conflito de versão, relações e permissões.
-- Testes de workflow: máximo de três empresas, isolamento de falha e exclusividade da execução.
+- Testes de workflow: lote simulado de 120 empresas com oito vagas, reabastecimento contínuo, cooldown, tentativa corretiva, cancelamento e isolamento de falha.
 - Testes de interface com Playwright: navegação, celular, formulários, CSV, regras, listas, Kanban e os dois fluxos de revisão.
 
 Os testes usam apenas registros sintéticos em memória. O teste de interface monta o mesmo componente em um ambiente separado na porta 4174, com requisições interceptadas; não é uma rota nem um modo de autenticação do aplicativo. Chamadas a OpenAI e gravações no Supabase não são realizadas pelos testes. O Playwright usa o Chrome instalado.
@@ -185,7 +185,9 @@ A auditoria de dependências encontrou uma cadeia transitiva do adaptador Nest d
 
 ### Recuperação de execuções dos agentes
 
-A geração e a gravação são etapas duráveis independentes: uma falha ao salvar não repete a chamada à IA. Cada tentativa de IA tem limite total de 60 segundos, sem retries internos do SDK; o workflow permite apenas uma nova tentativa para falhas temporárias (timeout, rede, 429 ou 5xx). Falhas de configuração, autenticação e validação encerram a empresa. Gravações e leituras da base têm limite de 20 segundos; conflitos recalculam a alteração a partir de uma versão atualizada.
+A geração e a gravação são etapas duráveis independentes: uma falha ao salvar não repete a chamada à IA. Cada tentativa de IA tem limite total configurável, de 60 segundos por padrão, sem retries internos do SDK; o workflow permite apenas uma nova tentativa para falhas temporárias (timeout, rede, 429 ou 5xx) ou resposta inválida. Erros de validação recebem feedback limitado aos campos e opções do catálogo. Falhas de configuração e autenticação encerram a empresa. Respostas 429 usam `Retry-After` e cooldown compartilhado; outras falhas temporárias usam espera com jitter. Gravações e leituras da base têm limite de 20 segundos; conflitos recalculam a alteração a partir de uma versão atualizada.
+
+O agente de sinais (`signals-v4`) envia à OpenAI um JSON Schema estrito derivado do catálogo de campos: cada campo tem suas próprias opções, colaboradores exige um inteiro não negativo e UF aceita somente siglas válidas. Valores ausentes usam `null`; campos extras são rejeitados. O mesmo esquema valida a resposta no servidor, que continua conferindo evidências, campos repetidos e regras de revisão humana. As revisões antigas preservam sua versão de prompt e seus valores; nenhuma migração de banco é necessária para essa atualização.
 
 Para uma execução antiga cujo workflow já terminou, envie `POST /api/agents/reconcile` com `{ "id": "ID_DA_EXECUCAO" }` em uma sessão autenticada. A reconciliação não retoma a IA: sincroniza cancelamento, conclusão ou falha com o histórico do workflow. Se o workflow ainda estiver ativo, a resposta informa isso; use o botão **Cancelar execução** para interrompê-lo.
 
@@ -198,3 +200,11 @@ O armazenamento local dos checkpoints fica em `.workflow-data/`, fora de `.next/
 Apply `supabase/migrations/202610090002_workspace_conflict.sql` after the sparse-write migration. Business version conflicts now return `PT409` (HTTP 409), rather than `40001`, which PostgREST can retry indefinitely using the same stale version. The application re-reads current data between at most four attempts with backoff/jitter. Progress-only saves skip scoring recalculation when evaluations are current and skip record relationship scans. Permissions, atomic version checks, relationship checks on record writes, and score history remain in effect.
 
 Database telemetry includes operation, duration, attempt, code and run ID when available, serialized as JSON so development logs retain the timings. A `TIMEOUT` alone does not distinguish database contention from network latency; compare read/save durations and conflict counts before changing database capacity.
+
+### Processamento de lotes
+
+A preparação lê somente a empresa, suas evidências e o produto selecionado. As gravações de progresso mesclam apenas os itens alterados; revisão, auditoria e conclusão são salvas atomicamente. Essas gravações mantêm a versão global sem regravar registros comerciais ou histórico de pontuação. A nova migração **`202610100001_agent_processing.sql` é obrigatória antes de ativar esta versão**.
+
+O painel distingue fila e processamento, mostra vagas ativas e ritmo de finalização e permite **Repetir empresas com falha**. A nova execução mantém a configuração original e exclui empresas com revisão de dados pendente. Resultados bem-sucedidos permanecem no lote anterior.
+
+Veja [docs/agent-processing.md](docs/agent-processing.md) para ativação, medição de 120 empresas e opções de infraestrutura. O teste com 120 empresas usa IA simulada; não comprova o tempo ou os limites da conta OpenAI em produção.

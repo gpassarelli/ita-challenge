@@ -150,6 +150,7 @@ export const commandSchema = z.discriminatedUnion("type", [
 export const agentRequestSchema = z
   .object({
     id,
+    retryOf: id.optional(),
     agent: z.enum(["signals", "outreach"]),
     companyIds: z.array(id).min(1).max(120),
     productId: id.nullable(),

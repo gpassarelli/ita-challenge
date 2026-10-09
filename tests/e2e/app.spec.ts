@@ -1633,3 +1633,54 @@ test("cancela uma execução ativa no painel e permite arquivar", async ({
   expect(execution.status).toBe("cancelled");
   expect(execution.items[0].steps?.[0].status).toBe("cancelled");
 });
+
+test("repete empresas com falha sem repetir o resultado bem-sucedido", async ({
+  page,
+}) => {
+  const state = emptyWorkspace();
+  const success = company(state, { name: "Empresa já concluída" });
+  const failed = company(state, { name: "Empresa para repetir" });
+  const original = run(success, {
+    status: "completed",
+    companyIds: [success.id, failed.id],
+    items: [
+      {
+        companyId: success.id,
+        status: "completed",
+        error: null,
+        revisionId: null,
+      },
+      {
+        companyId: failed.id,
+        status: "failed",
+        error: "Código: AI_FIELD.",
+        revisionId: null,
+      },
+    ],
+  });
+  const saved = revision(success, { runId: original.id });
+  original.items[0].revisionId = saved.id;
+  state.runs.push(original);
+  state.revisions.push(saved);
+  await mount(page, state);
+  await page
+    .getByRole("button", { name: "Abrir execuções", exact: true })
+    .click();
+  const panel = page.getByRole("dialog");
+  await panel.getByRole("button", { name: /Analisar sinais/ }).click();
+  await panel
+    .getByRole("button", {
+      name: "Repetir empresas com falha (1)",
+      exact: true,
+    })
+    .click();
+  await expect(
+    panel.getByText("1 de 1 empresas finalizadas · 100%"),
+  ).toBeVisible();
+  expect(state.runs).toHaveLength(2);
+  expect(state.runs[1].companyIds).toEqual([failed.id]);
+  expect(state.runs[1].retryOf).toBe(original.id);
+  expect(
+    state.revisions.filter((r) => r.companyId === success.id),
+  ).toHaveLength(1);
+});
