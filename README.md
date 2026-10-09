@@ -117,7 +117,7 @@ Cada avaliação guarda versões dos dados, das regras e do cálculo, instante, 
 
 ## Agentes e revisão humana
 
-**Agente 1 — Analisar sinais:** executa por empresa ou seleção; propõe alterações somente em atributos de qualificação permitidos, com evidências e contradições. Não escreve notas. Aprovar aplica o conjunto inteiro e recalcula em uma transação. Recusar exige motivo. Uma mudança da empresa ou dos registros relacionados invalida a aprovação de uma revisão pendente.
+**Agente 1 — Analisar sinais:** executa por empresa ou seleção; propõe alterações somente em atributos de qualificação permitidos, com evidências e contradições. Não escreve notas. Aprovar aplica o conjunto inteiro e recalcula em uma transação. Recusar exige motivo. Uma mudança da empresa ou dos registros relacionados invalida a aprovação de uma revisão pendente. Empresas com revisões de dados pendentes não podem executar uma nova análise de sinais: primeiro aprove ou recuse todas as pendências; revisões desatualizadas devem ser recusadas. Em seleções mistas, apenas as empresas aptas são executadas, com as exclusões identificadas antes do envio e preservadas no lote. Revisões de mensagens não bloqueiam sinais. A validação ocorre no servidor, inclusive antes da inferência e da gravação do resultado.
 
 **Agente 2 — Preparar abordagem:** exige produto e canal; pessoa é opcional. Usa o produto selecionado, dados aprovados, notas, sinais e oportunidades. Gera assunto quando aplicável, mensagem, justificativa e evidências. O usuário pode editar, aprovar, recusar e copiar a mensagem aprovada. **O aplicativo não envia mensagens.**
 

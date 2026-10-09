@@ -193,6 +193,7 @@ export type Revision = {
 };
 export type AgentRun = {
   id: string;
+  skippedCompanies?: { companyId: string; revisionIds: string[] }[];
   agent: "signals" | "outreach";
   companyIds: string[];
   productId: string | null;

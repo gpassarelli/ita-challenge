@@ -549,7 +549,7 @@ export function decideRevision(
   if (decision === "approved" && r.type === "data") {
     if (company.version !== r.companyVersion)
       throw new Error(
-        "A empresa mudou após a análise. Execute o agente novamente.",
+        "A empresa mudou após a análise. Recuse esta revisão desatualizada antes de executar o agente novamente.",
       );
     const updates = { ...company.data };
     for (const change of r.changes) {
