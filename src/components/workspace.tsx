@@ -57,12 +57,9 @@ import { Dialog } from "./ui/dialog";
 import { RecordTable } from "./data-table";
 import { RecordForm, ImportDialog, ListForm, api } from "./forms";
 import { RulesEditor } from "./rules-editor";
-import { AgentDialog, ReviewDialog } from "./agents-and-reviews";
-import {
-  ExecutionPanel,
-  RunList,
-  type ExecutionTarget,
-} from "./execution-panel";
+import { AgentDialog } from "./agents-and-reviews";
+import type { ExecutionTarget } from "./execution-panel";
+import { ReviewPages, type ReviewDraft } from "./review-pages";
 import { RecordDetail } from "./record-detail";
 const NAV = [
   { name: "Empresas", icon: Building2, dataset: "Prospects" },
@@ -72,6 +69,7 @@ const NAV = [
   { name: "Contratações", icon: Link2, dataset: "Clientes_Atuais" },
   { name: "Portfólio", icon: Package, dataset: "Portfolio" },
   { name: "Listas", icon: Layers3 },
+  { name: "Workflows", icon: Clock3 },
   { name: "Revisões", icon: ClipboardCheck },
   { name: "Configurações", icon: Settings2 },
 ] as const;
@@ -86,7 +84,8 @@ const DESCRIPTIONS: Record<string, string> = {
   Portfólio:
     "Os produtos e as propostas de valor que orientam suas abordagens.",
   Listas: "Seu foco comercial, atualizado conforme os dados mudam.",
-  Revisões: "A inteligência sugere. Você decide o que segue adiante.",
+  Workflows: "Acompanhe as execuções e todos os resultados gerados.",
+  Revisões: "Revise por empresa. As decisões ficam no arquivo.",
   Configurações: "Defina o que significa uma boa oportunidade para você.",
 };
 export function WorkspaceApp({
@@ -111,15 +110,17 @@ export function WorkspaceApp({
   const [contractStatus, setContractStatus] = useState("");
   const [listId, setListId] = useState("");
   const [kanban, setKanban] = useState(true);
-  const [reviewFilter, setReviewFilter] = useState("pending");
+
   const [recordForm, setRecordForm] = useState<{
     dataset: Dataset;
     id?: string;
   } | null>(null);
   const [importing, setImporting] = useState<Dataset | null>(null);
-  const [executionTarget, setExecutionTarget] =
+  const [executionTarget, storeExecutionTarget] =
     useState<ExecutionTarget | null>(null);
-  const executionTrigger = useRef<HTMLButtonElement>(null);
+  const [reviewDrafts, setReviewDrafts] = useState<Record<string, ReviewDraft>>(
+    {},
+  );
   const [detailTab, setDetailTab] = useState("Dados");
   const [detailId, setDetailId] = useState<string | null>(null);
   const [rulesKind, setRulesKind] = useState<RuleSet["kind"] | null>(null);
@@ -128,7 +129,32 @@ export function WorkspaceApp({
     agent: "signals" | "outreach";
     companyIds: string[];
   } | null>(null);
-  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [reviewNavigation, setReviewNavigation] = useState(0);
+  const [reviewId, storeReviewId] = useState<string | null>(null);
+  const [reviewView, setReviewView] = useState<"pending" | "archived">(
+    "pending",
+  );
+  const setReviewId = (id: string | null) => {
+    storeReviewId(id);
+    if (id) {
+      setReviewNavigation((n) => n + 1);
+      setReviewView(
+        state.revisions.find((r) => r.id === id)?.status === "pending"
+          ? "pending"
+          : "archived",
+      );
+      setPage("Revisões");
+      setMobile(false);
+    }
+  };
+  const setExecutionTarget = (target: ExecutionTarget | null) => {
+    storeExecutionTarget(target);
+    if (target?.revisionId) setReviewId(target.revisionId);
+    else if (target) {
+      setPage("Workflows");
+      setMobile(false);
+    }
+  };
   const [setup, setSetup] = useState(false);
   const refreshing = useRef(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
@@ -138,6 +164,16 @@ export function WorkspaceApp({
     try {
       const r = await api("/api/workspace");
       setState(r.state);
+      setReviewDrafts((drafts) =>
+        Object.fromEntries(
+          Object.entries(drafts).filter(([id]) =>
+            r.state.revisions.some(
+              (revision: { id: string; status: string }) =>
+                revision.id === id && revision.status === "pending",
+            ),
+          ),
+        ),
+      );
       setAiReady(r.aiReady);
       setLastUpdated(new Date().toLocaleTimeString("pt-BR"));
       setError("");
@@ -179,6 +215,12 @@ export function WorkspaceApp({
   const save = async (command: UserCommand) => {
     const result = await api("/api/commands", command);
     setState(result.state);
+    if (command.type === "review")
+      setReviewDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[command.id];
+        return next;
+      });
     setNotice(
       command.type === "archiveRun"
         ? "Execução arquivada para a equipe."
@@ -268,7 +310,7 @@ export function WorkspaceApp({
   if (page === "Contratações" && contractStatus)
     records = records.filter((r) => r.data.customer_status === contractStatus);
   const detail = state.records.find((r) => r.id === detailId);
-  const revision = state.revisions.find((r) => r.id === reviewId);
+
   const pendingReviews = state.revisions.filter(
     (r) => r.status === "pending",
   ).length;
@@ -477,12 +519,7 @@ export function WorkspaceApp({
             >
               <Menu size={18} />
             </button>
-            <span
-              className={cn(
-                "hidden items-center gap-2 sm:flex",
-                executionTarget && "lg:hidden 2xl:flex",
-              )}
-            >
+            <span className="hidden items-center gap-2 sm:flex">
               <span>Espaço de trabalho</span>
               <ChevronRight size={12} />
               <span className="text-neutral-600">{page}</span>
@@ -490,14 +527,10 @@ export function WorkspaceApp({
           </div>
           <div className="flex items-center gap-3">
             <Button
-              ref={executionTrigger}
               variant="ghost"
               size="sm"
               aria-label="Abrir execuções"
-              aria-expanded={!!executionTarget}
-              onClick={() =>
-                setExecutionTarget(executionTarget ? null : { runId: null })
-              }
+              onClick={() => setExecutionTarget({ runId: null })}
             >
               <Clock3 />
               Execuções
@@ -515,12 +548,7 @@ export function WorkspaceApp({
                 <span className="hidden xl:inline">pendentes</span>
               </span>
             </Button>
-            <span
-              className={cn(
-                "hidden items-center gap-1.5 sm:flex",
-                executionTarget && "lg:hidden 2xl:flex",
-              )}
-            >
+            <span className="hidden items-center gap-1.5 sm:flex">
               <span
                 className={cn(
                   "size-1.5 rounded-full",
@@ -577,7 +605,9 @@ export function WorkspaceApp({
               </p>
             </div>
             <div className="flex items-center gap-2">
-              {!["Listas", "Revisões", "Configurações"].includes(page) && (
+              {!["Listas", "Workflows", "Revisões", "Configurações"].includes(
+                page,
+              ) && (
                 <>
                   <Button
                     variant="outline"
@@ -1101,175 +1131,31 @@ export function WorkspaceApp({
                 </div>
               </div>
             )}
-            {page === "Revisões" && (
-              <div className="flex-1 overflow-auto border-t border-neutral-200 bg-[#fafaf8] p-6">
-                <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-                  {[
-                    { label: "Aguardando decisão", count: pendingReviews },
-                    {
-                      label: "Aprovadas sem edição",
-                      count: state.revisions.filter(
-                        (r) => r.status === "approved" && !r.edited,
-                      ).length,
-                    },
-                    {
-                      label: "Aprovadas com edição",
-                      count: state.revisions.filter(
-                        (r) => r.status === "approved" && r.edited,
-                      ).length,
-                    },
-                    {
-                      label: "Recusadas",
-                      count: state.revisions.filter(
-                        (r) => r.status === "rejected",
-                      ).length,
-                    },
-                  ].map((m) => (
-                    <div
-                      key={m.label}
-                      className="rounded-lg border border-neutral-200 bg-white p-4"
-                    >
-                      <p className="text-[11px] text-neutral-500">{m.label}</p>
-                      <p className="mt-2 text-2xl font-semibold tracking-tight">
-                        {m.count}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-                <section className="mb-5" aria-label="Execuções dos agentes">
-                  <h2 className="mb-3 text-sm font-medium">
-                    Execuções dos agentes
-                  </h2>
-                  <RunList
-                    state={state}
-                    runs={state.runs.filter((r) => !r.archivedAt)}
-                    onOpen={(run) => setExecutionTarget({ runId: run.id })}
-                  />
-                </section>
-                <div className="mb-4 flex gap-2">
-                  {[
-                    { value: "pending", label: "Pendentes" },
-                    { value: "approved", label: "Aprovadas" },
-                    { value: "rejected", label: "Recusadas" },
-                  ].map((t) => (
-                    <Button
-                      key={t.value}
-                      variant={reviewFilter === t.value ? "outline" : "ghost"}
-                      size="sm"
-                      onClick={() => setReviewFilter(t.value)}
-                    >
-                      {t.label}
-                    </Button>
-                  ))}
-                </div>
-                {state.revisions.filter((r) => r.status === reviewFilter)
-                  .length ? (
-                  <div className="space-y-3">
-                    {state.revisions
-                      .filter((r) => r.status === reviewFilter)
-                      .slice()
-                      .reverse()
-                      .map((r) => (
-                        <button
-                          key={r.id}
-                          onClick={() => setReviewId(r.id)}
-                          className="flex w-full items-center gap-4 rounded-lg border border-neutral-200 bg-white p-4 text-left hover:border-neutral-300"
-                        >
-                          <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-[#f4eee5] text-[#a38661]">
-                            {r.type === "data" ? (
-                              <Sparkles size={18} />
-                            ) : (
-                              <MessageSquare size={18} />
-                            )}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium">
-                              {display(
-                                state.records.find((c) => c.id === r.companyId)
-                                  ?.data.name,
-                              )}
-                            </p>
-                            <p className="mt-1 text-xs text-neutral-500">
-                              {r.type === "data"
-                                ? r.changes.length + " alterações propostas"
-                                : "Mensagem de abordagem"}{" "}
-                              · {r.promptVersion} · {dateBR(r.createdAt)}
-                            </p>
-                          </div>
-                          <ArrowUpRight
-                            size={15}
-                            className="text-neutral-400"
-                          />
-                        </button>
-                      ))}
-                  </div>
-                ) : (
-                  <Empty
-                    icon={ClipboardCheck}
-                    title={
-                      reviewFilter === "pending"
-                        ? "Tudo em dia por aqui"
-                        : "Nenhuma revisão nesta categoria"
-                    }
-                    description="Execute uma análise ou prepare uma abordagem a partir das empresas. As propostas dos agentes aparecem aqui."
-                  />
-                )}
-                {state.revisions.length > 0 && (
-                  <details className="mt-6 rounded border border-neutral-200 bg-white p-4">
-                    <summary className="cursor-pointer text-xs font-medium">
-                      Qualidade por agente e versão do prompt
-                    </summary>
-                    {[
-                      ...new Set(state.revisions.map((r) => r.promptVersion)),
-                    ].map((v) => {
-                      const rows = state.revisions.filter(
-                        (r) => r.promptVersion === v,
-                      );
-                      return (
-                        <p key={v} className="mt-3 text-xs text-neutral-500">
-                          {v} ·{" "}
-                          {
-                            rows.filter(
-                              (r) => r.status === "approved" && !r.edited,
-                            ).length
-                          }{" "}
-                          sem edição ·{" "}
-                          {
-                            rows.filter(
-                              (r) => r.status === "approved" && r.edited,
-                            ).length
-                          }{" "}
-                          com edição ·{" "}
-                          {rows.filter((r) => r.status === "rejected").length}{" "}
-                          recusadas
-                        </p>
-                      );
-                    })}
-                  </details>
-                )}
-              </div>
+            {["Revisões", "Workflows"].includes(page) && (
+              <ReviewPages
+                page={page}
+                state={state}
+                runId={executionTarget?.runId ?? null}
+                reviewId={reviewId}
+                reviewNavigation={reviewNavigation}
+                view={reviewView}
+                onView={setReviewView}
+                onSelectReview={storeReviewId}
+                onOpenReview={setReviewId}
+                onOpenRun={(id) => setExecutionTarget({ runId: id })}
+                onSave={save}
+                onResume={resumeRun}
+                onCancel={cancelRun}
+                onRetry={pendingRun ? undefined : retryRun}
+                drafts={reviewDrafts}
+                onDraft={(id, draft) =>
+                  setReviewDrafts((previous) => ({ ...previous, [id]: draft }))
+                }
+              />
             )}
           </div>
         )}
       </main>
-      {executionTarget && (
-        <ExecutionPanel
-          state={state}
-          target={executionTarget}
-          onTarget={setExecutionTarget}
-          triggerRef={executionTrigger}
-          onClose={() => setExecutionTarget(null)}
-          onSave={save}
-          onResume={resumeRun}
-          onCancel={cancelRun}
-          onRetry={pendingRun ? undefined : retryRun}
-          onReturnCompany={(id) => {
-            setExecutionTarget(null);
-            setDetailTab("Execuções");
-            setDetailId(id);
-          }}
-        />
-      )}
       {notice && (
         <div
           role="status"
@@ -1383,16 +1269,6 @@ export function WorkspaceApp({
               "Execução iniciada. Você pode acompanhar o progresso aqui.",
             );
           }}
-        />
-      )}
-      {revision && (
-        <ReviewDialog
-          key={revision.id}
-          open
-          revision={revision}
-          state={state}
-          onClose={() => setReviewId(null)}
-          onSave={save}
         />
       )}
       <Dialog

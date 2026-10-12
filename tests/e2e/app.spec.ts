@@ -132,6 +132,9 @@ async function mount(page: Page, state: Workspace = emptyWorkspace()) {
     }
   });
   await page.goto("http://localhost:4174");
+  await expect(
+    page.getByRole("heading", { name: "Empresas", exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("Carregando seus dados...")).toHaveCount(0);
   return state;
 }
@@ -402,13 +405,10 @@ test("cadastro, CSV, regras, lista dinâmica, Kanban e aprovação pela interfac
     .click();
   await page.getByRole("button", { name: "Executar agente" }).click();
   await expect(
-    page.getByRole("heading", { name: "Empresas", exact: true }),
+    page.getByRole("heading", { name: "Workflows", exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Revisar resultado", exact: true })
-    .click();
+  await page.getByRole("button", { name: /Revisar$/, exact: false }).click();
   await page.getByRole("button", { name: "Aprovar revisão inteira" }).click();
-  await page.getByRole("button", { name: "Fechar execuções" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(state.revisions[0].status).toBe("approved");
   expect(
@@ -453,17 +453,14 @@ test("cadastro, CSV, regras, lista dinâmica, Kanban e aprovação pela interfac
     .getByLabel("Produto do portfólio *")
     .selectOption(state.records.find((r) => r.dataset === "Portfolio")!.id);
   await page.getByRole("button", { name: "Executar agente" }).click();
+  await page.getByRole("button", { name: /Revisar$/, exact: false }).click();
   await page
-    .getByRole("button", { name: "Revisar resultado", exact: true })
-    .click();
-  await page
-    .getByRole("dialog")
+    .getByRole("region", { name: "Detalhes da revisão" })
     .getByLabel("Mensagem", { exact: true })
     .fill("Mensagem editada pelo usuário.");
   await page
     .getByRole("button", { name: "Aprovar mensagem", exact: true })
     .click();
-  await page.getByRole("button", { name: "Fechar execuções" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   const messageRevision = state.revisions.find((r) => r.type === "message")!;
   expect(messageRevision.edited).toBe(true);
@@ -1011,7 +1008,7 @@ test("progresso mostra etapas, falhas parciais e execuções antigas em desktop 
     .getByRole("button", { name: "Abrir execuções", exact: true })
     .click();
   await page
-    .getByRole("dialog")
+    .getByRole("region", { name: "Lista de workflows" })
     .getByRole("button", { name: /Analisar sinais/ })
     .click();
   await expect(
@@ -1044,7 +1041,7 @@ test("progresso mostra etapas, falhas parciais e execuções antigas em desktop 
     "A IA excedeu o tempo de resposta. Código: AI_TIMEOUT.";
   execution.status = "completed";
   execution.finishedAt = new Date().toISOString();
-  await expect(page.getByText("Concluída com falhas")).toBeVisible({
+  await expect(page.getByText("Concluída com falhas").last()).toBeVisible({
     timeout: 10000,
   });
   await expect(
@@ -1122,8 +1119,8 @@ async function openExecution(page: Page, companyName?: string) {
   await page
     .getByRole("button", { name: "Abrir execuções", exact: true })
     .click();
-  const panel = page.getByRole("dialog");
-  await panel
+  await page
+    .getByRole("region", { name: "Lista de workflows" })
     .getByRole("button", {
       name: companyName
         ? new RegExp(companyName)
@@ -1131,12 +1128,12 @@ async function openExecution(page: Page, companyName?: string) {
     })
     .first()
     .click();
-  return panel;
+  return page.getByRole("region", { name: "Detalhes do workflow" });
 }
 
-test("lote exclui pendências, revisa no painel e arquiva no histórico das empresas", async ({
+test("lote exclui pendências, revisa por empresa e mantém resultados arquivados no workflow", async ({
   page,
-}, testInfo) => {
+}) => {
   const state = emptyWorkspace();
   const blocked = company(state, { name: "Empresa bloqueada" });
   company(state, { name: "Empresa elegível Alfa" });
@@ -1155,125 +1152,69 @@ test("lote exclui pendências, revisa no painel e arquiva no histórico das empr
   await expect(
     page.getByText("2 empresa(s) apta(s) para análise"),
   ).toBeVisible();
-  await expect(
-    page.getByText("As empresas abaixo não serão executadas", { exact: false }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Revisar pendência" }),
-  ).toBeVisible();
   await page.getByRole("button", { name: /Executar agente · 2/ }).click();
-  const panel = page.getByRole("dialog");
+  const workflow = page.getByRole("region", { name: "Detalhes do workflow" });
   await expect(
-    page.getByRole("heading", { name: "Empresas", exact: true }),
+    workflow.getByRole("heading", { name: "Empresas não executadas" }),
   ).toBeVisible();
-  await expect(panel.getByText("Empresas não executadas · 1")).toBeVisible();
   await expect(
-    panel.getByRole("button", { name: "Arquivar execução", exact: true }),
+    workflow.getByRole("button", { name: "Arquivar execução", exact: true }),
   ).toBeDisabled();
   expect(state.runs[0].items).toHaveLength(2);
-  // The underlying workspace stays usable while the panel is open.
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: "Portfólio", exact: true })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Portfólio", exact: true }),
-  ).toBeVisible();
-  await expect(panel).toBeVisible();
   for (const [name, decision] of [
     ["Empresa elegível Alfa", "approve"],
     ["Empresa elegível Beta", "reject"],
   ]) {
-    const item = panel
-      .locator("details")
-      .filter({ has: page.locator("summary", { hasText: name }) })
-      .last();
-    await item.locator("summary").first().click();
-    await item.getByRole("button", { name: "Revisar resultado" }).click();
+    await page.getByRole("button", { name: "Abrir execuções" }).click();
+    await page
+      .getByRole("region", { name: "Resultados do workflow" })
+      .getByRole("button", { name: new RegExp(name) })
+      .click();
+    const detail = page.getByRole("region", { name: "Detalhes da revisão" });
     if (decision === "approve")
-      await panel
+      await detail
         .getByRole("button", { name: "Aprovar revisão inteira" })
         .click();
     else {
-      await panel
+      await detail
         .getByLabel("Observação da revisão", { exact: false })
         .fill("Evidência insuficiente");
-      await panel.getByRole("button", { name: "Recusar revisão" }).click();
+      await detail.getByRole("button", { name: "Recusar revisão" }).click();
     }
     await expect(
-      panel.getByRole("heading", { name: "Detalhes da execução" }),
-    ).toBeVisible();
+      page.getByRole("button", { name: /Arquivadas ·/ }),
+    ).toContainText(decision === "approve" ? "1" : "2");
   }
-  await expect(
-    panel.getByText("0 revisões pendentes", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Abrir execuções" }),
-  ).toBeInViewport();
-  await page.setViewportSize({ width: 1024, height: 768 });
-  const triggerBox = await page
-    .getByRole("button", { name: "Abrir execuções" })
-    .boundingBox();
-  const panelBox = await panel.boundingBox();
-  expect(triggerBox!.x + triggerBox!.width).toBeLessThanOrEqual(panelBox!.x);
-  await page.setViewportSize({ width: 1280, height: 720 });
-  await page.screenshot({
-    path: testInfo.outputPath("execution-panel-desktop.png"),
-    fullPage: true,
-  });
-  await panel
-    .getByRole("button", { name: "Arquivar execução", exact: true })
-    .click();
-  await expect(panel.getByText("Nenhuma execução por aqui.")).toBeVisible();
-  expect(state.runs[0].archivedBy).toBe(actor);
-  expect(
-    state.revisions.filter(
-      (r) => r.runId === state.runs[0].id && r.status === "pending",
-    ),
-  ).toHaveLength(0);
-  await panel.getByRole("button", { name: "Fechar execuções" }).click();
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: "Empresas", exact: true })
-    .click();
-  await page
-    .getByRole("cell", { name: "Empresa elegível Alfa", exact: true })
-    .click();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Execuções", exact: true })
-    .click();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: /Analisar sinais.*Arquivada/ })
-    .click();
-  await expect(panel.getByText(/Arquivada em/)).toBeVisible();
-  await expect(
-    panel.getByRole("button", { name: "Ver revisão", exact: true }).first(),
-  ).toBeVisible();
-  await panel.getByRole("button", { name: "Voltar à empresa" }).click();
+  await page.getByRole("button", { name: "Abrir execuções" }).click();
   await expect(
     page
-      .getByRole("dialog")
-      .getByRole("heading", { name: "Empresa elegível Alfa" }),
+      .getByRole("region", { name: "Resultados do workflow" })
+      .getByRole("button"),
+  ).toHaveCount(2);
+  await workflow.getByRole("button", { name: "Arquivar execução" }).click();
+  await expect(page.getByText("Nenhuma execução por aqui.")).toBeVisible();
+  expect(state.runs[0].archivedBy).toBe(actor);
+  await page.getByLabel("Incluir execuções arquivadas").check();
+  await page
+    .getByRole("region", { name: "Lista de workflows" })
+    .getByRole("button", { name: /Analisar sinais/ })
+    .click();
+  await expect(workflow.getByText(/Execução arquivada em/)).toBeVisible();
+  await page
+    .getByRole("region", { name: "Resultados do workflow" })
+    .getByRole("button", { name: /Empresa elegível Alfa/ })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Arquivadas · 2" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("dialog").getByText("Arquivada", { exact: true }),
+    page
+      .getByRole("region", { name: "Detalhes da revisão" })
+      .getByText("Aprovada", { exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Fechar", exact: true })
-    .click();
-  await page
-    .getByRole("cell", { name: "Empresa bloqueada", exact: true })
-    .click();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Execuções", exact: true })
-    .click();
   await expect(
-    page.getByRole("dialog").getByText("Nenhuma execução por aqui."),
-  ).toBeVisible();
+    page.getByRole("button", { name: "Aprovar revisão inteira" }),
+  ).toHaveCount(0);
 });
 
 test("sinais bloqueados orientam recusar revisão desatualizada antes de executar", async ({
@@ -1304,7 +1245,13 @@ test("sinais bloqueados orientam recusar revisão desatualizada antes de executa
     .getByLabel("Observação da revisão", { exact: false })
     .fill("Cadastro mudou");
   await page.getByRole("button", { name: "Recusar revisão" }).click();
-  await page.getByRole("button", { name: "Fechar execuções" }).click();
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "Empresas", exact: true })
+    .click();
+  await page
+    .getByLabel("Selecionar Empresa com revisão", { exact: true })
+    .check();
   await page
     .getByRole("button", { name: "Analisar sinais", exact: true })
     .click();
@@ -1343,12 +1290,12 @@ test("rascunho da revisão permanece durante atualização e navegação do work
   state.runs.push(execution);
   state.revisions.push(r);
   await mount(page, state);
-  const panel = await openExecution(page);
-  await panel
-    .locator("summary")
-    .filter({ hasText: "Empresa da mensagem" })
+  await openExecution(page);
+  await page
+    .getByRole("region", { name: "Resultados do workflow" })
+    .getByRole("button")
     .click();
-  await panel.getByRole("button", { name: "Revisar resultado" }).click();
+  const panel = page.getByRole("region", { name: "Detalhes da revisão" });
   await panel
     .getByLabel("Mensagem", { exact: true })
     .fill("Rascunho mantido após atualização");
@@ -1364,6 +1311,10 @@ test("rascunho da revisão permanece durante atualização e navegação do work
     .getByRole("navigation")
     .getByRole("button", { name: "Sinais", exact: true })
     .click();
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /^Revisões/ })
+    .click();
   await expect(panel.getByLabel("Mensagem", { exact: true })).toHaveValue(
     "Rascunho mantido após atualização",
   );
@@ -1377,7 +1328,7 @@ test("rascunho da revisão permanece durante atualização e navegação do work
   expect(state.revisions[0].originalMessage?.body).toBe("Mensagem original");
 });
 
-test("painel móvel mantém foco, fecha com Escape e permite arquivar falhas", async ({
+test("workflows no celular alternam lista e detalhes sem perder histórico", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1397,35 +1348,28 @@ test("painel móvel mantém foco, fecha com Escape e permite arquivar falhas", a
     }),
   );
   await mount(page, state);
-  const panel = await openExecution(page);
-  await expect(panel).toHaveCSS("width", "390px");
-  for (let index = 0; index < 8; index++) {
-    await page.keyboard.press("Tab");
-    expect(
-      await panel.evaluate((element) =>
-        element.contains(document.activeElement),
-      ),
-    ).toBe(true);
-  }
+  const detail = await openExecution(page);
   await expect(
-    panel.getByRole("button", { name: "Arquivar execução" }),
+    detail.getByRole("button", { name: "Arquivar execução" }),
   ).toBeEnabled();
   await page.screenshot({
-    path: testInfo.outputPath("execution-panel-mobile.png"),
+    path: testInfo.outputPath("workflows-mobile.png"),
     fullPage: true,
   });
-  await page.keyboard.press("Escape");
-  await expect(panel).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Abrir execuções" }),
-  ).toBeFocused();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
-  await openExecution(page);
-  await page.getByRole("button", { name: "Arquivar execução" }).click();
+  await detail.getByRole("button", { name: "Voltar aos workflows" }).click();
+  await expect(
+    page.getByRole("region", { name: "Lista de workflows" }),
+  ).toBeVisible();
+  await page
+    .getByRole("region", { name: "Lista de workflows" })
+    .getByRole("button", { name: /Analisar sinais/ })
+    .click();
+  await detail.getByRole("button", { name: "Arquivar execução" }).click();
   await expect(page.getByText("Nenhuma execução por aqui.")).toBeVisible();
 });
 
@@ -1458,7 +1402,7 @@ test("fila lista execuções antigas com carregar mais e preserva revisão na p�
   state.revisions.push(revision(c, { runId: archived.id, status: "approved" }));
   await mount(page, state);
   await page.getByRole("button", { name: "Abrir execuções" }).click();
-  const panel = page.getByRole("dialog");
+  const panel = page.getByRole("region", { name: "Lista de workflows" });
   await expect(
     panel.getByRole("button", { name: /Analisar sinais/ }),
   ).toHaveCount(15);
@@ -1467,17 +1411,16 @@ test("fila lista execuções antigas com carregar mais e preserva revisão na p�
     panel.getByRole("button", { name: /Analisar sinais/ }),
   ).toHaveCount(18);
   await expect(panel.getByText("Arquivada", { exact: true })).toHaveCount(0);
-  await panel.getByRole("button", { name: "Fechar execuções" }).click();
   await page
     .getByRole("navigation")
     .getByRole("button", { name: "Revisões", exact: true })
     .click();
-  await page.getByRole("button", { name: "Aprovadas", exact: true }).click();
-  await page
-    .getByRole("button", { name: /Empresa histórica.*alterações propostas/ })
-    .click();
+  await page.getByRole("button", { name: /Arquivadas ·/ }).click();
+  await page.getByLabel("Filtrar decisões arquivadas").selectOption("approved");
   await expect(
-    page.getByRole("dialog").getByText("Aprovada", { exact: true }),
+    page
+      .getByRole("region", { name: "Detalhes da revisão" })
+      .getByText("Aprovada", { exact: true }),
   ).toBeVisible();
 });
 
@@ -1545,10 +1488,10 @@ test("revisão agrupa justificativa e evidências por alteração sem comentári
     .click();
   await page
     .getByRole("button", {
-      name: /Empresa com propostas.*alterações propostas/,
+      name: /2 alterações propostas/,
     })
     .click();
-  const dialog = page.getByRole("dialog");
+  const dialog = page.getByRole("region", { name: "Detalhes da revisão" });
   const growth = dialog
     .getByRole("heading", { name: "Sinal crescimento", exact: true })
     .locator("..");
@@ -1587,7 +1530,7 @@ test("revisão agrupa justificativa e evidências por alteração sem comentári
   });
 });
 
-test("cancela uma execução ativa no painel e permite arquivar", async ({
+test("cancela uma execução ativa em Workflows e permite arquivar", async ({
   page,
 }) => {
   const state = emptyWorkspace();
@@ -1616,8 +1559,11 @@ test("cancela uma execução ativa no painel e permite arquivar", async ({
   await page
     .getByRole("button", { name: "Abrir execuções", exact: true })
     .click();
-  const panel = page.getByRole("dialog");
-  await panel.getByRole("button", { name: /Analisar sinais/ }).click();
+  await page
+    .getByRole("region", { name: "Lista de workflows" })
+    .getByRole("button", { name: /Analisar sinais/ })
+    .click();
+  const panel = page.getByRole("region", { name: "Detalhes do workflow" });
   await panel
     .getByRole("button", { name: "Cancelar execução", exact: true })
     .click();
@@ -1666,8 +1612,11 @@ test("repete empresas com falha sem repetir o resultado bem-sucedido", async ({
   await page
     .getByRole("button", { name: "Abrir execuções", exact: true })
     .click();
-  const panel = page.getByRole("dialog");
-  await panel.getByRole("button", { name: /Analisar sinais/ }).click();
+  await page
+    .getByRole("region", { name: "Lista de workflows" })
+    .getByRole("button", { name: /Analisar sinais/ })
+    .click();
+  const panel = page.getByRole("region", { name: "Detalhes do workflow" });
   await panel
     .getByRole("button", {
       name: "Repetir empresas com falha (1)",
@@ -1683,4 +1632,150 @@ test("repete empresas com falha sem repetir o resultado bem-sucedido", async ({
   expect(
     state.revisions.filter((r) => r.companyId === success.id),
   ).toHaveLength(1);
+});
+
+test("fila por empresa avança, arquiva decisões e filtra o histórico", async ({
+  page,
+}) => {
+  const state = emptyWorkspace();
+  const a = company(state, { name: "Empresa Alfa fila" });
+  const b = company(state, { name: "Empresa Beta fila" });
+  const first = revision(a, { createdAt: "2026-10-03T00:00:00Z" });
+  const sameCompany = revision(a, { createdAt: "2026-10-01T00:00:00Z" });
+  const nextCompany = revision(b, { createdAt: "2026-10-02T00:00:00Z" });
+  state.revisions.push(first, sameCompany, nextCompany);
+  await mount(page, state);
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /^Revisões/ })
+    .click();
+  const list = page.getByRole("region", { name: "Revisões por empresa" });
+  const detail = page.getByRole("region", { name: "Detalhes da revisão" });
+  await expect(list.getByRole("button")).toHaveCount(3);
+  await expect(
+    detail.getByRole("heading", { name: a.data.name as string }),
+  ).toBeVisible();
+  await detail.getByRole("button", { name: "Aprovar revisão inteira" }).click();
+  await expect(list.getByRole("button")).toHaveCount(2);
+  await expect(
+    detail.getByRole("heading", { name: a.data.name as string }),
+  ).toBeVisible();
+  // Approval changed the company version, so the older data proposal must be rejected.
+  await expect(
+    detail.getByRole("button", { name: "Aprovar revisão inteira" }),
+  ).toBeDisabled();
+  await detail.getByRole("button", { name: "Recusar revisão" }).click();
+  await expect(
+    detail.getByRole("alert").filter({ hasText: "Informe o motivo da recusa" }),
+  ).toBeVisible();
+  await detail
+    .getByLabel("Observação da revisão", { exact: false })
+    .fill("Proposta anterior desatualizada");
+  await detail.getByRole("button", { name: "Recusar revisão" }).click();
+  await expect(
+    detail.getByRole("heading", { name: b.data.name as string }),
+  ).toBeVisible();
+  await detail.getByRole("button", { name: "Aprovar revisão inteira" }).click();
+  await expect(page.getByText(/Tudo em dia por aqui/)).toBeVisible();
+  await page.getByRole("button", { name: "Arquivadas · 3" }).click();
+  await expect(list.getByRole("button")).toHaveCount(3);
+  await page.getByLabel("Filtrar decisões arquivadas").selectOption("rejected");
+  await expect(list.getByRole("button")).toHaveCount(1);
+  await expect(detail.getByText("Recusada", { exact: true })).toBeVisible();
+  await page.getByLabel("Buscar empresa nas revisões").fill("Beta");
+  await expect(page.getByText("Nenhuma empresa encontrada.")).toBeVisible();
+  await page.getByLabel("Filtrar decisões arquivadas").selectOption("approved");
+  await expect(list.getByRole("button")).toHaveCount(1);
+  await expect(
+    detail.getByRole("heading", { name: b.data.name as string }),
+  ).toBeVisible();
+  expect(state.revisions.map((r) => r.status)).toEqual([
+    "approved",
+    "rejected",
+    "approved",
+  ]);
+});
+
+test("erro de decisão mantém rascunho e fila até o salvamento ser confirmado", async ({
+  page,
+}) => {
+  const state = emptyWorkspace();
+  const c = company(state, { name: "Empresa falha ao salvar" });
+  const r = revision(c);
+  state.revisions.push(r);
+  await mount(page, state);
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /^Revisões/ })
+    .click();
+  await page
+    .getByLabel("Observação da revisão", { exact: false })
+    .fill("Minha justificativa preservada");
+  await page.route("http://localhost:4174/api/commands", (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: "Falha temporária ao salvar" },
+    }),
+  );
+  await page.getByRole("button", { name: "Recusar revisão" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Falha temporária ao salvar",
+  );
+  await expect(
+    page.getByLabel("Observação da revisão", { exact: false }),
+  ).toHaveValue("Minha justificativa preservada");
+  await expect(
+    page.getByRole("button", { name: "Pendentes · 1" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Arquivadas · 0" }),
+  ).toBeVisible();
+  expect(r.status).toBe("pending");
+});
+
+test("novos resultados preservam seleção e revisão móvel tem navegação por teclado", async ({
+  page,
+}, testInfo) => {
+  const state = emptyWorkspace();
+  const a = company(state, { name: "Empresa em revisão" });
+  const b = company(state, { name: "Empresa nova" });
+  state.revisions.push(revision(a, { createdAt: "2026-10-01T00:00:00Z" }));
+  await mount(page, state);
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /^Revisões/ })
+    .click();
+  const detail = page.getByRole("region", { name: "Detalhes da revisão" });
+  await expect(
+    detail.getByRole("heading", { name: a.data.name as string }),
+  ).toBeVisible();
+  state.revisions.push(revision(b, { createdAt: "2026-10-02T00:00:00Z" }));
+  await page.getByRole("button", { name: "Atualizar dados" }).click();
+  const list = page.getByRole("region", { name: "Revisões por empresa" });
+  await expect(list.getByRole("button")).toHaveCount(2);
+  await expect(
+    detail.getByRole("heading", { name: a.data.name as string }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("revisions-desktop.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await list.getByRole("button").first().focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    detail.getByRole("heading", { name: b.data.name as string }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("revisions-mobile.png"),
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await detail.getByRole("button", { name: "Voltar às revisões" }).click();
+  await expect(list).toBeVisible();
+  await expect(list.getByRole("button", { pressed: true })).toHaveCount(1);
 });

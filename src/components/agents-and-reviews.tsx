@@ -244,11 +244,15 @@ export function ReviewContent({
   state,
   onClose,
   onSave,
+  draft,
+  onDraft,
 }: {
   revision: Revision;
   state: Workspace;
   onClose: () => void;
   onSave: (command: UserCommand) => Promise<void>;
+  draft?: { subject: string; body: string; reason: string };
+  onDraft?: (draft: { subject: string; body: string; reason: string }) => void;
 }) {
   const [subject, setSubject] = useState(revision.message?.subject ?? "");
   const [body, setBody] = useState(revision.message?.body ?? "");
@@ -256,6 +260,20 @@ export function ReviewContent({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const values =
+    revision.status === "pending"
+      ? (draft ?? { subject, body, reason })
+      : {
+          subject: revision.message?.subject ?? "",
+          body: revision.message?.body ?? "",
+          reason: revision.reason,
+        };
+  const updateDraft = (field: "subject" | "body" | "reason", value: string) => {
+    if (onDraft) onDraft({ ...values, [field]: value });
+    else if (field === "subject") setSubject(value);
+    else if (field === "body") setBody(value);
+    else setReason(value);
+  };
   const company = state.records.find((r) => r.id === revision.companyId);
   const stale =
     revision.type === "data" && company?.version !== revision.companyVersion;
@@ -267,9 +285,9 @@ export function ReviewContent({
         type: "review",
         id: revision.id,
         decision,
-        reason,
+        reason: values.reason,
         ...(revision.type === "message"
-          ? { editedMessage: { subject, body } }
+          ? { editedMessage: { subject: values.subject, body: values.body } }
           : {}),
       });
       onClose();
@@ -387,8 +405,6 @@ export function ReviewContent({
             }[revision.status]
           }
         </Badge>
-        <Badge>{revision.promptVersion}</Badge>
-        <Badge>{revision.model}</Badge>
         {revision.edited && <Badge>Aprovada com edição</Badge>}
       </div>
       {revision.type === "message" && (
@@ -449,9 +465,9 @@ export function ReviewContent({
               <Label htmlFor="review-subject">Assunto</Label>
               <Input
                 id="review-subject"
-                value={subject}
+                value={values.subject}
                 readOnly={revision.status !== "pending"}
-                onChange={(e) => setSubject(e.target.value)}
+                onChange={(e) => updateDraft("subject", e.target.value)}
               />
             </div>
           )}
@@ -460,9 +476,9 @@ export function ReviewContent({
             <Textarea
               id="review-body"
               className="min-h-60 leading-relaxed"
-              value={body}
+              value={values.body}
               readOnly={revision.status !== "pending"}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={(e) => updateDraft("body", e.target.value)}
             />
           </div>
           {revision.status === "approved" && (
@@ -471,7 +487,8 @@ export function ReviewContent({
               onClick={async () => {
                 try {
                   await navigator.clipboard.writeText(
-                    (subject ? subject + "\n\n" : "") + body,
+                    (values.subject ? values.subject + "\n\n" : "") +
+                      values.body,
                   );
                   setCopied(true);
                 } catch {
@@ -512,6 +529,9 @@ export function ReviewContent({
           Contexto e auditoria da análise
         </summary>
         <p className="mt-3 text-neutral-500">
+          {revision.promptVersion} · {revision.model}
+        </p>
+        <p className="mt-3 text-neutral-500">
           Solicitado por {revision.createdBy} · {dateBR(revision.createdAt)} ·
           Execução {revision.runId}
         </p>
@@ -542,8 +562,8 @@ export function ReviewContent({
             </Label>
             <Textarea
               id="review-reason"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
+              value={values.reason}
+              onChange={(e) => updateDraft("reason", e.target.value)}
               placeholder="Registre o que está correto ou precisa melhorar..."
             />
           </div>
